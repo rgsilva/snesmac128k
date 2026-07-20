@@ -15,6 +15,15 @@ int main(int argc, char **argv){
   if (n != 65536) { fprintf(stderr, "ROM is %zu bytes, expected 65536\n", n); return 1; }
 
   mac_init(rom);
+
+  /* optional HLE floppy image (logical 512-byte sectors) */
+  {
+    static uint8_t disk[409600];
+    FILE *df = fopen("roms/sys11_data.bin", "rb");
+    if (df) { size_t dn = fread(disk, 1, sizeof disk, df); fclose(df);
+      mac_set_disk(disk, (uint32_t)dn); printf("disk: %zu bytes loaded\n", dn); }
+    else printf("no disk image (roms/sys11_data.bin) — no floppy\n");
+  }
   printf("reset: SP=%08X PC=%08X\n", m68kc.a[7], m68kc.pc);
 
   int overlay_switched = 0;
@@ -65,14 +74,12 @@ int main(int argc, char **argv){
     int x, y;
     for (x = 0; x < 21888; x++) if (r[base + x]) nz++;
     printf("\nframebuffer @ $%05X: %ld/%d non-zero bytes\n", base, nz, 21888);
-    printf("center crop x[192,320) y[124,208), 1 char/pixel (set bit = '#'):\n");
-    for (y = 124; y < 208; y++) {
-      for (x = 192; x < 320; x++) {
-        uint8_t b = r[base + y * 64 + (x >> 3)];
-        putchar(((b >> (7 - (x & 7))) & 1) ? '#' : '.');
-      }
-      putchar('\n');
+    /* the Mac 1bpp framebuffer (512x342, MSB-left, 1=black) IS a valid PBM P4 */
+    { FILE *pf = fopen("/tmp/macscreen.pbm", "wb");
+      if (pf) { fprintf(pf, "P4\n512 342\n"); fwrite(r + base, 1, 21888, pf); fclose(pf);
+        printf("wrote /tmp/macscreen.pbm\n"); }
     }
+    (void)x; (void)y;
   }
   return 0;
 }

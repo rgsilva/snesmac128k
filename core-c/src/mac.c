@@ -189,8 +189,85 @@ void mac_init(const uint8_t *rom_){
   m68kc.sr = 0x2700;                /* supervisor, IRQ mask 7, trace off */
 }
 
+/* ---- HLE the .Sony floppy driver ---------------------------------------
+** Intercept Device-Manager OS traps (Read/Write/Control/Status/KillIO) whose
+** parameter block targets refnum -5 (.Sony) and service them from a logical
+** disk image, skipping the real driver — and thus all the IWM/GCR/motor-speed
+** emulation. ioPosOffset is the byte offset of the block on the disk. */
+static const uint8_t *disk_data;
+static uint32_t       disk_size;
+void mac_set_disk(const uint8_t *data, uint32_t size){ disk_data = data; disk_size = size; }
+void (*mac_sony_hook)(int tnum, uint32_t pos, uint32_t cnt) = 0;   /* host debugging */
+
+static int sony_trap(void){
+  uint16_t op;
+  int tnum, refnum;
+  uint32_t pb;
+  if (!disk_data) return 0;
+  op = m68k_read16(m68kc.pc);
+  if ((op & 0xF800u) != 0xA000u) return 0;       /* not an OS (Device Manager) trap */
+  tnum = op & 0xFF;
+  if (tnum < 0x02 || tnum > 0x06) return 0;       /* Read/Write/Control/Status/KillIO only */
+  pb = m68kc.a[0];
+  refnum = (int16_t)m68k_read16(pb + 0x18);
+  if (refnum == -4) { if (tnum != 0x02) return 0; }  /* -4: serve reads only */
+  else if (refnum != -5) return 0;                    /* -5 (.Sony): all I/O */
+
+  /* The real .Sony driver stores the disk geometry in the drive-queue element
+  ** when a disk is inserted; _MountVol validates the volume size against it.
+  ** Our HLE bypasses the driver, leaving dQDrvSz = 0, so the mount rejects the
+  ** MDB with badMDBErr (-60). Populate it here (400K floppy = 800 blocks). */
+  {
+    uint32_t e = m68k_read32(0x030A);             /* DrvQHdr.qHead */
+    while (e && e < MAC_RAM_SIZE) {
+      if ((int16_t)m68k_read16(e + 12) == 0) {    /* dQDrvSz still unset */
+        m68k_write16(e + 12, (uint16_t)(disk_size / 512u));  /* logical blocks */
+        m68k_write16(e + 14, 0);                  /* dQDrvSz2 (high word) */
+      }
+      e = m68k_read32(e);                          /* qLink -> next element */
+    }
+  }
+
+  if (tnum == 0x02) {                             /* _Read */
+    uint32_t buf = m68k_read32(pb + 0x20);        /* ioBuffer */
+    uint32_t cnt = m68k_read32(pb + 0x24);        /* ioReqCount */
+    uint32_t pos = m68k_read32(pb + 0x2E);        /* ioPosOffset (byte offset) */
+    uint32_t k;
+    for (k = 0; k < cnt; k++)
+      m68k_write8(buf + k, (pos + k < disk_size) ? disk_data[pos + k] : 0);
+    m68k_write32(pb + 0x28, cnt);                 /* ioActCount */
+    if (mac_sony_hook) mac_sony_hook(tnum, pos, cnt);
+  } else if (mac_sony_hook) mac_sony_hook(tnum, m68k_read16(pb + 0x1A), 0);  /* csCode */
+  m68k_write16(pb + 0x10, 0);                     /* ioResult = noErr */
+  m68kc.d[0] = 0;
+
+  /* Emulate the driver's IODone. An asynchronous request carries a completion
+  ** routine (ioCompletion, pb+0x0C != 0); the real driver would invoke it on
+  ** I/O completion, and that routine advances the File Manager's mount/open
+  ** state machine and ultimately clears the OUTER request's ioResult that the
+  ** caller busy-waits on. Opcode-level interception skips the driver, so we run
+  ** the completion ourselves: jump to it (A0=pb, D0=result) with a return
+  ** address just past the trap word. Any further async reads it issues are
+  ** served and chained the same way, unwinding the whole operation. */
+  if (op & 0x0400u) {                             /* async trap (bit 10) only */
+    uint32_t iocompl = m68k_read32(pb + 0x0C);
+    if (iocompl) {
+      m68kc.a[7] -= 4;
+      m68k_write32(m68kc.a[7], m68kc.pc + 2);     /* completion RTS -> past trap */
+      m68kc.a[0] = pb;                            /* completion arg: A0 = pb */
+      m68kc.pc = iocompl;
+      return 1;
+    }
+  }
+  /* Synchronous request: caller continues inline; its BEQ/BNE needs Z from the
+  ** result code, which the real trap glue would have set. */
+  m68kc.sr = (uint16_t)((m68kc.sr & ~0x0Fu) | 0x04u);  /* Z=1 (noErr), N/V/C=0 */
+  m68kc.pc += 2;                                  /* skip the trap word */
+  return 1;
+}
+
 void mac_step(void){
-  m68k_step();
+  if (!sony_trap()) m68k_step();
   instr_count++;
   via_t1 = (uint16_t)(via_t1 - 1);   /* rough timer motion so poll loops progress */
   via_t2 = (uint16_t)(via_t2 - 1);
