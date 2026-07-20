@@ -33,8 +33,9 @@ Three facts make it feasible, and all three are load-bearing:
 
 | Layer                       | Approach                                          | Borrowed from |
 |-----------------------------|---------------------------------------------------|---------------|
-| 68000 CPU core              | portable C (Musashi), Calypsi → 65816             | snespico8     |
-| CPU correctness             | C core vs SingleStepTests/m68000 vectors          | snes86 (parity layer 1) |
+| 68000 CPU core              | **lean C core** (`core-c/src/m68k.c`), Calypsi → 65816 | snespico8 |
+| CPU oracle                  | Musashi (host only) — the reference to diff against | (Musashi won't compile on Calypsi) |
+| CPU correctness             | both cores vs SingleStepTests/m68000 vectors      | snes86 (parity layer 1) |
 | SNES-build correctness      | same-source host ⇄ Mesen, state-hash parity       | snespico8 (`snesparity.sh`) |
 | Guest RAM > WRAM            | cartridge SRAM windows (→ SA-1 later)             | snespico8 `probe_sram` / snes86 BIGMEM |
 | Machine model (VIA/IWM/SCC) | **HLE**; host `runmac` shares the contract        | snes86 (`runpc`/`dosboot`) |
@@ -71,9 +72,14 @@ Three facts make it feasible, and all three are load-bearing:
 - **M1 — 68000 C core passes the m68000 vectors.** ← **the validation gate.**
   Gate: 100% of normal execution; address-error-frame details and TAS/TRAPV are
   documented divergences. *(done — see below.)*
-- **M1a — Musashi under Calypsi.** Spike: does the C core compile with cc65816
-  (16-bit `size_t`, `-O0`, no int64 hi-word)? If yes, huge shortcut; if not,
-  write a leaner single-step core. *(next.)*
+- **M1a — Musashi under Calypsi. (done — NO.)** Two hard blockers: Musashi's
+  dispatch is a flat `[0x10000]` jump table (Calypsi errors "array too large",
+  16-bit object ceiling), and it stores 32-bit registers in `unsigned int`
+  (16-bit on Calypsi → silent truncation). Pivot: keep Musashi as the *host
+  oracle*, write a lean core for the SNES.
+- **M1b — lean 68000 core. (done.)** `core-c/src/m68k.c` (~470 lines):
+  `uint32_t` registers, bitfield dispatch (no 64K table). Compiles clean on
+  Calypsi `--target=snes` (68 KB object). See result below.
 - **M2 — Parity harness (C ⇄ SNES).** Reuse snespico8's state-hash diff +
   mailbox; same source both sides ⇒ catches Calypsi/glue bugs.
 - **M3 — Mac machine model, boot ROM on host.** Memory map (reset ROM-overlay,
@@ -125,6 +131,26 @@ code — an address error is a crash on real HW); (2) **1,624 undefined-result
 ops** — invalid-BCD inputs to ABCD/SBCD/NBCD, DIVU/DIVS overflow, CHK, LINK A7,
 and the vector authors' own known-bad TAS/TRAPV. Normal instruction execution
 and all normal exceptions match **exactly**. The 68000 core is validated.
+
+## M1b — lean core validation result
+
+The shipped-to-SNES core (`core-c/src/m68k.c`) is validated against the same
+vectors via the same harness — `EM68K_LIB=build/libem68k_lean.dylib` swaps it in
+for Musashi (`make -C core-c/tests test-lean`). It is a full 68000: all
+addressing modes, the ALU/shift/rotate/bit/BCD groups, MOVEM, and the
+exception path (TRAP, TRAPV, CHK, zero-divide, privilege, line-A/line-F — all
+2500/2500; line-A traps are how the Mac Toolbox is called, so that mattering is
+the point).
+
+**127 files, 317,500 vectors: 81.1% byte-exact, 100.000% accounted for, 0
+unexplained failures** (59 opcodes 100% exact). Same benign classes as Musashi:
+odd-address faults (the core doesn't fault-frame-match, irrelevant to the Mac)
+and the undefined-result ops (invalid-BCD, DIV overflow, CHK flags, LINK A7,
+TAS/TRAPV). MULU/MULS/DIVU/DIVS pass all defined cases exactly. Getting there
+was a short bug hunt with the harness green at each step: the rotate type
+encoding (ROX↔RO swapped), CMPM's postincrement, Bcc's `0xFF` short displacement,
+UNLK A7, MOVEM's reversed predecrement order, and the `#imm` operand forms of
+BTST / MOVE-to-CCR. The lean core is validated.
 
 ## Legal
 

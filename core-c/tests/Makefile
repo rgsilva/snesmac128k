@@ -33,5 +33,16 @@ vectors:
 test: $(DYLIB)
 	python3 run_vectors.py --fails 8
 
+# ---- the lean core (core-c/src/m68k.c) — validated against the same vectors --
+LEAN := build/libem68k_lean.dylib
+LEANSRC := m68ktest_lean.c ../src/m68k.c
+$(LEAN): $(LEANSRC) ../src/m68k.h | build
+	cc -O2 -std=c11 -fPIC -I../src -shared -o $@ $(LEANSRC)
+
+.PHONY: lean test-lean
+lean: $(LEAN)
+test-lean: $(LEAN)
+	EM68K_LIB=$(LEAN) python3 run_vectors.py --fails 8
+
 clean:
 	rm -rf build $(MUS)/m68kops.c $(MUS)/m68kops.h $(MUS)/m68kmake

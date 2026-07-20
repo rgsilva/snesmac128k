@@ -28,7 +28,9 @@ from multiprocessing import Pool, cpu_count
 import decode  # sibling: decode_test(content, ptr) -> (ptr, test)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LIB = os.path.join(HERE, "build", "libem68k.dylib")
+# EM68K_LIB selects the core under test: the Musashi oracle (default) or the
+# lean core (build/libem68k_lean.dylib). Both expose the same tm_run1 ABI.
+LIB = os.environ.get("EM68K_LIB", os.path.join(HERE, "build", "libem68k.dylib"))
 VEC = os.path.join(HERE, "vectors")
 
 # m68k_register_t indices (see musashi/m68k.h)
