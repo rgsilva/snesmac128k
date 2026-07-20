@@ -94,8 +94,8 @@ Three facts make it feasible, and all three are load-bearing:
   2bpp tiles (`mkmacfb`); the SNES ROM (`snes/macvideo.c`, Mode 0) DMAs them to
   VRAM and displays the Happy Mac in Mesen. See result below. (Full 512-wide
   hi-res + a live on-SNES boot are later refinements.)
-- **M5 — Disk HLE → desktop.** Trap `.Sony`, serve sectors. Gate: System 0.97 +
-  Finder 1.0 desktop on the SNES (slowly). *The* milestone.
+- **M5 — Disk HLE → desktop. ✓** Trap `.Sony`, serve sectors from the image.
+  System 1.1 boots to the Finder desktop (host). *The* milestone — see below.
 - **M6 — Mouse.** SNES pad → mouse move/click via VIA/SCC HLE. Keyboard stretch.
 - **M7 — Perf + SA-1 + release.** SA-1 for linear RAM + 3× speed; asm hot-paths;
   BYO-ROM public build + copyright scrub (snes86 release-packaging playbook).
@@ -221,24 +221,54 @@ reach the Happy Mac in reasonable time) and full 512-wide hi-res are later
 work. The captured framebuffer contains Apple's Happy Mac artwork, so the
 generated tiles (and any screenshot) are gitignored, like the ROM.
 
-## M5 — disk boot to the desktop (in progress)
+## M5 — disk boot to the desktop ✓ (System 1.1 Finder, host)
 
-The hard one. Groundwork done: System 1.1 downloaded + extracted (StuffIt→
-DiskCopy 4.2→ `core-c/tests/dc42.py` splits it into 800×512 sectors + tags;
-sector 0's `4C4B` 'LK' confirms it's bootable), and the IWM instrumented
-(`mac_iwm_hook`) to decode the Sony drive protocol: the ROM enables the motor,
-selects a drive register with CA0-2 + SEL (**SEL is VIA port A bit 5**, not the
-IWM SELECT line), reads it on the status SENSE bit, and strobes LSTRB to step.
-`mac.c` now models the sense registers (CSTIN/TK0/etc.) + head stepping.
+**Done — a real Mac 128K ROM boots System 1.1 to the Finder desktop:** the
+🍎 File/Edit/View/Special menu bar, the "System Disk" floppy icon, and the
+Trash. Reached by **high-level-emulating the `.Sony` disk driver** rather than
+finishing the IWM/GCR path (which is the single hardest part of Mac emulation
+and was abandoned as too deep for the payoff).
 
-**Not yet booting:** the ROM does only a minimal periodic drive poll and hasn't
-triggered a boot-read — the disk-present detection point and exact sense
-polarity still need pinning (against MAME `sonydriv` / Mini vMac). Remaining:
-that, then **6-and-2 GCR track encoding** (sync `D5 AA 96` address + `D5 AA AD`
-data fields, variable sectors/track by zone: 12/11/10/9/8) fed through the IWM
-data register, so the `.Sony` driver reads the boot blocks → the System loads →
-Finder → desktop. A focused chunk; the IWM/GCR is the single hardest part of Mac
-emulation. Disk images are Apple/Apple-licensed — bring-your-own, gitignored.
+`sony_trap()` in `mac.c` (called from `mac_step` before each instruction)
+intercepts Device-Manager OS traps — opcode `(op & 0xF800) == 0xA000`, trap
+number 0x02–0x06 (Read/Write/Control/Status/KillIO) — whose paramblock (`A0`)
+`ioRefNum` (+0x18) is **−5** (the `.Sony` driver) or **−4** (the drive itself,
+reads only). For a read it copies sectors straight from the disk image
+(`roms/sys11_data.bin`) at the absolute `ioPosOffset` (+0x2E), fills
+`ioActCount`/`ioResult`, and returns — skipping the driver, the IWM, GCR
+encoding, and motor-speed timing entirely.
+
+Three fixes were each load-bearing (and each needed a deep host-side trace —
+capstone with the M68K backend was the tool that cracked the ROM disassembly):
+
+1. **CCR from the result.** The real trap glue does `TST D0` before returning,
+   so the caller sees `Z` set for `noErr`. The boot block's `_Read; BEQ` accept
+   relies on it, and — critically — a mount completion runs
+   `beq …; moveq #0,D3` right after restoring its saved registers. Missing `Z`
+   fell through and zeroed `D3` (the block number of the volume allocation map),
+   so the map's continuation was read from block 1 instead of block 3, the
+   free-block count disagreed with `drFreeBks`, and `_MountVol` failed with
+   `badMDBErr` (−60).
+2. **Drive geometry.** The real driver stores the disk size in the drive-queue
+   element on insertion; the mount validates the volume against it. The HLE
+   walks `DrvQHdr` (`$030A` → qHead) and sets `dQDrvSz` (+12) = 800 (400 KB /
+   512), else the mount rejects the volume on the size check.
+3. **Asynchronous `IODone`.** An async request (trap bit 10, opcode `0xA402`)
+   carrying an `ioCompletion` (pb + 0x0C ≠ 0) must have that routine *run* — the
+   HLE jumps to it (`A0` = pb, `D0` = 0, `Z` = 1, return address past the trap).
+   It advances the File Manager's mount/open state machine and clears the outer
+   request's `ioResult` that the caller busy-waits on; without it `_MountVol`
+   spins forever polling its paramblock.
+
+Boot chain, all traced: read boot blocks (block 0 `LK` = `0x4C4B`) → execute the
+boot code in RAM at `$010000` → `_MountVol` reads the MDB at block 2 (MFS
+signature `0xD2D7`) and validates the allocation map → open + read the System
+file → `_SysError(40)` = `dsGreeting`, the **"Welcome to Macintosh"** box (normal
+boot, not a crash) → the Finder draws the desktop.
+
+Disk images and the ROM are Apple copyright — bring-your-own, gitignored; the
+desktop screenshot is likewise not committed. Next: try the System 2.0 disk
+(swap `roms/sys11_data.bin`), then the live-on-SNES port (M4b).
 
 ## Legal
 
