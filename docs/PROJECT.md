@@ -83,8 +83,12 @@ Three facts make it feasible, and all three are load-bearing:
 - **M2 — Parity harness (C ⇄ SNES). (done.)** The Calypsi-compiled core runs on
   the SNES (Mesen) and matches the host bit-for-bit. Caught two real Calypsi
   bugs the host validation can't. See result below.
-- **M3 — Mac machine model, boot ROM on host.** Memory map (reset ROM-overlay,
-  VIA/IWM/SCC decode), VBL IRQ, HLE stubs; diff boot trace vs Mini vMac.
+- **M3 — Mac machine model, boot ROM on host. (done — boots to the Happy Mac.)**
+  `core-c/src/mac.c` + `runmac.c`: the real memory map (ROM-overlay at reset,
+  RAM/ROM windows, VIA/IWM/SCC decode), VBL interrupt (core IRQ support added),
+  minimal VIA (overlay + IFR/IER) and IWM (mode-register probe). A genuine Mac
+  128K ROM boots through power-on, RAM test, the overlay switch, QuickDraw, the
+  gray desktop, and draws the Happy Mac. See result below.
 - **M4 — Framebuffer → SNES.** Mode-7 downscale spike, then crisp Mode 5/6
   planar + dirty-rect. Gate: Happy Mac visible on real SNES output.
 - **M5 — Disk HLE → desktop.** Trap `.Sony`, serve sectors. Gate: System 0.97 +
@@ -171,6 +175,27 @@ its job, catching two Calypsi issues invisible to host-only testing:
    negative `MOVEQ`. Fixed with a branchless `sxt8()` (`(x^0x80)-0x80`). This is
    the M2 payoff: a codegen bug that passes all 317,500 host vectors but breaks
    on real SNES hardware.
+
+## M3 — the Mac boots (Happy Mac)
+
+`core-c/src/mac.c` wraps the lean core with the real Macintosh 128K machine: the
+24-bit address decode (ROM-overlay at reset → RAM at $0 once the boot clears VIA
+PA4; ROM $400000; SCC/IWM/VIA windows), a minimal VIA (overlay latch, IFR/IER,
+CA1=VBL), and an IWM stubbed just enough to pass the ROM's mode-register probe
+(no disk). The core gained autovector interrupt support (`m68kc.irq`, vector
+24+level) for the 60 Hz VBL. Host driver: `core-c/src/runmac.c`
+(`make -C core-c/tests boot`).
+
+**Result:** a genuine Macintosh 128K ROM (checksum `0x28BA61CE`, validated)
+boots — reset at `$40002A`, ROM checksum, IWM probe, **overlay switch** (RAM at
+`$0`, real stack at `$FBE0`), QuickDraw init, the 50% gray desktop, and the
+**Happy Mac** drawn dead-center — then settles into the disk-search loop with
+VBL interrupts firing. Hardware self-test passed (a failure would draw the Sad
+Mac with a hex code). The bring-up was a "boot and fix what it polls" loop: the
+IWM status bit-5 spin, then its mode-register write/read-back probe, were the
+two gates to get past. Advancing to the flashing "insert disk" icon and loading
+a System is M5 (disk HLE). The ROM is Apple copyright — bring-your-own,
+gitignored at `roms/mac128k.rom`.
 
 ## Legal
 

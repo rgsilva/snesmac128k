@@ -44,5 +44,14 @@ lean: $(LEAN)
 test-lean: $(LEAN)
 	EM68K_LIB=$(LEAN) python3 run_vectors.py --fails 8
 
+# ---- M3: boot a real Mac 128K ROM through the machine model (host) ----
+# ROM is bring-your-own (Apple copyright, gitignored): roms/mac128k.rom
+runmac: build/runmac
+build/runmac: ../src/runmac.c ../src/mac.c ../src/m68k.c ../src/mac.h ../src/m68k.h | build
+	cc -O2 -std=c11 -I../src -o $@ ../src/runmac.c ../src/mac.c ../src/m68k.c
+.PHONY: runmac boot
+boot: build/runmac
+	./build/runmac ../../roms/mac128k.rom
+
 clean:
 	rm -rf build $(MUS)/m68kops.c $(MUS)/m68kops.h $(MUS)/m68kmake

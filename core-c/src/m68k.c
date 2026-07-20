@@ -579,8 +579,20 @@ static void op_bcd(uint16_t op, int sub){            /* ABCD (C) / SBCD (8) — 
   if (mode == 0) dreg_w(rx, 1, r); else ea_store(1, r);
 }
 
+/* Take an autovectored interrupt at level `lvl` (vector 24+lvl). */
+static void take_interrupt(int lvl){
+  uint16_t oldsr = m68kc.sr;
+  m68k_set_sr((uint16_t)((oldsr & ~(SR_T | SR_I)) | SR_S | ((uint16_t)lvl << 8)));
+  m68kc.a[7] -= 4; m68k_write32(m68kc.a[7], m68kc.pc);
+  m68kc.a[7] -= 2; m68k_write16(m68kc.a[7], oldsr);
+  m68kc.pc = m68k_read32((uint32_t)(24 + lvl) * 4);
+  m68kc.stopped = 0;
+}
+
 void m68k_step(void){
   uint16_t op;
+  int lvl = m68kc.irq & 7;
+  if (lvl && (lvl == 7 || lvl > (int)((m68kc.sr >> 8) & 7))) { take_interrupt(lvl); return; }
   if (m68kc.stopped) return;
   g_start_pc = m68kc.pc;
   op = fetch16();

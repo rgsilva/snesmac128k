@@ -19,6 +19,7 @@ typedef struct {
   uint32_t isp;      /* inactive superv SP (valid while in user mode) */
   uint16_t sr;       /* T-S--III---XNZVC */
   uint8_t  stopped;  /* set by STOP, cleared by reset/irq */
+  uint8_t  irq;      /* pending autovector IRQ level 0-7 (set by the machine) */
 } m68k_t;
 
 extern m68k_t m68kc;
