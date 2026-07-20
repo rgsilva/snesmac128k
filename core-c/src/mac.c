@@ -25,6 +25,8 @@ static uint16_t via_t1, via_t2;
 int      mac_overlay(void)   { return overlay; }
 uint32_t mac_vbl_count(void) { return vbl_count; }
 uint8_t *mac_ram_ptr(void)   { return ram; }
+int mac_dbg_ier(void){ return via_ier; }
+int mac_dbg_ifr(void){ return via_ifr; }
 
 static void via_update_irq(void){
   /* VIA (CA1=VBL, etc.) is wired to 68000 IPL level 1 */
@@ -85,25 +87,31 @@ static int      disk_in = 1, drive_track = 0, motor_on = 0, step_dir = 0;
 static uint16_t tach_ctr;
 static uint8_t  iwm_lines, iwm_mode;
 
+void (*mac_sense_hook)(int reg, int val) = 0;   /* host debugging */
+
 static int drive_sense(void){
   /* Sony read register = (CA2,CA1,CA0,SEL); SEL is VIA port A bit 5 (not the
   ** IWM SELECT line). Authoritative mapping (Inside Mac / MAME sonydriv). */
   int ca0 = iwm_lines & 1, ca1 = (iwm_lines >> 1) & 1, ca2 = (iwm_lines >> 2) & 1;
   int sel = (via_ora >> 5) & 1;
-  switch ((ca2 << 3) | (ca1 << 2) | (ca0 << 1) | sel) {
-    case 0x0: return step_dir;              /* DIRTN */
-    case 0x1: return disk_in ? 0 : 1;       /* CSTIN: 0 = disk in place */
-    case 0x2: return 1;                     /* STEP: 1 = step idle (0 = stepping) */
-    case 0x3: return 1;                     /* WRTPRT: 1 = not write-protected */
-    case 0x4: return motor_on ? 0 : 1;      /* MOTORON: 0 = motor on */
-    case 0x5: return drive_track ? 1 : 0;   /* TK0: 0 = head at track 0 */
-    case 0x7: return (tach_ctr >> 3) & 1;   /* TACH */
-    case 0x9: return 0;                     /* RDDATA1 */
-    case 0xB: return 0;                     /* SIDES: 0 = single-sided (400K) */
-    case 0xC: return 0;                     /* READY: 0 = ready */
-    case 0xD: return 0;                     /* DRVIN: 0 = drive installed */
-    default:  return 0;
+  int reg = (ca2 << 3) | (ca1 << 2) | (ca0 << 1) | sel;
+  int v;
+  switch (reg) {
+    case 0x0: v = step_dir; break;              /* DIRTN */
+    case 0x1: v = disk_in ? 0 : 1; break;       /* CSTIN: 0 = disk in place */
+    case 0x2: v = 1; break;                     /* STEP: 1 = step idle */
+    case 0x3: v = 1; break;                     /* WRTPRT: 1 = not write-protected */
+    case 0x4: v = motor_on ? 0 : 1; break;      /* MOTORON: 0 = motor on */
+    case 0x5: v = drive_track ? 1 : 0; break;   /* TK0: 0 = head at track 0 */
+    case 0x7: v = (tach_ctr >> 3) & 1; break;   /* TACH */
+    case 0x9: v = 0; break;                     /* RDDATA1 */
+    case 0xB: v = 0; break;                     /* SIDES: 0 = single-sided (400K) */
+    case 0xC: v = 0; break;                     /* READY: 0 = ready */
+    case 0xD: v = 0; break;                     /* DRVIN: 0 = drive installed */
+    default:  v = 0; break;
   }
+  if (mac_sense_hook) mac_sense_hook(reg, v);
+  return v;
 }
 
 static uint8_t iwm_access(uint32_t a, int is_write, uint8_t wv){
