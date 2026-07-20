@@ -74,14 +74,63 @@ static void via_write(uint32_t a, uint8_t v){
 /* ---- IWM (floppy) — track the state-machine lines (ca0..q7, selected by
 ** address bits A9-A12: line = reg>>1, on = reg&1) and model the mode register
 ** so the ROM's write/read-back probe passes. No disk (sense=0, no data). ---- */
-static uint8_t iwm_lines, iwm_mode;
+/* optional trace hook (host debugging): (addr, write?, iwm lines, value) */
+void (*mac_iwm_hook)(uint32_t a, int wr, unsigned lines, unsigned val) = 0;
+
+/* Sony 400K drive: the ROM selects a drive register with ca0-2 + SEL and reads
+** it on the status SENSE bit (bit 7); it steps the head with LSTRB strobes and
+** reads GCR data via the data register. We model "disk present" + the sense
+** lines and head position; GCR data streaming comes next. */
+static int      disk_in = 1, drive_track = 0, motor_on = 0, step_dir = 0;
+static uint16_t tach_ctr;
+static uint8_t  iwm_lines, iwm_mode;
+
+static int drive_sense(void){
+  /* Sony read register = (CA2,CA1,CA0,SEL); SEL is VIA port A bit 5 (not the
+  ** IWM SELECT line). Authoritative mapping (Inside Mac / MAME sonydriv). */
+  int ca0 = iwm_lines & 1, ca1 = (iwm_lines >> 1) & 1, ca2 = (iwm_lines >> 2) & 1;
+  int sel = (via_ora >> 5) & 1;
+  switch ((ca2 << 3) | (ca1 << 2) | (ca0 << 1) | sel) {
+    case 0x0: return step_dir;              /* DIRTN */
+    case 0x1: return disk_in ? 0 : 1;       /* CSTIN: 0 = disk in place */
+    case 0x2: return 1;                     /* STEP: 1 = step idle (0 = stepping) */
+    case 0x3: return 1;                     /* WRTPRT: 1 = not write-protected */
+    case 0x4: return motor_on ? 0 : 1;      /* MOTORON: 0 = motor on */
+    case 0x5: return drive_track ? 1 : 0;   /* TK0: 0 = head at track 0 */
+    case 0x7: return (tach_ctr >> 3) & 1;   /* TACH */
+    case 0x9: return 0;                     /* RDDATA1 */
+    case 0xB: return 0;                     /* SIDES: 0 = single-sided (400K) */
+    case 0xC: return 0;                     /* READY: 0 = ready */
+    case 0xD: return 0;                     /* DRVIN: 0 = drive installed */
+    default:  return 0;
+  }
+}
+
 static uint8_t iwm_access(uint32_t a, int is_write, uint8_t wv){
   int reg = (int)((a >> 9) & 0xF);
+  uint8_t rv = 0;
+  int old_lstrb = (iwm_lines >> 3) & 1;
   if (reg & 1) iwm_lines |= (uint8_t)(1u << (reg >> 1)); else iwm_lines &= (uint8_t)~(1u << (reg >> 1));
-  { int q6 = (iwm_lines >> 6) & 1, q7 = (iwm_lines >> 7) & 1, en = (iwm_lines >> 4) & 1;
-    if (is_write) { if (q7 && q6 && !en) iwm_mode = wv; return 0; }   /* write mode reg (drive off) */
-    if (q6 && !q7) return (uint8_t)(iwm_mode & 0x1F);                 /* status: mode bits, sense=0 */
-    return 0x00; }                                                    /* data / handshake: no disk */
+  {
+    int q6 = (iwm_lines >> 6) & 1, q7 = (iwm_lines >> 7) & 1, en = (iwm_lines >> 4) & 1;
+    int lstrb = (iwm_lines >> 3) & 1;
+    int ca0 = iwm_lines & 1, ca1 = (iwm_lines >> 1) & 1, ca2 = (iwm_lines >> 2) & 1, sel = (via_ora >> 5) & 1;
+    motor_on = en;
+    if (lstrb && !old_lstrb) {               /* strobe writes a drive control register */
+      switch ((sel << 3) | (ca2 << 2) | (ca1 << 1) | ca0) {
+        case 0x0: step_dir = 0; break;                              /* step toward higher tracks */
+        case 0x1: step_dir = 1; break;                              /* step toward track 0 */
+        case 0x2: drive_track += step_dir ? (drive_track ? -1 : 0) : (drive_track < 79 ? 1 : 0); break; /* STEP */
+        default: break;
+      }
+    }
+    if (is_write) { if (q7 && q6 && !en) iwm_mode = wv; }
+    else if (q6 && !q7) rv = (uint8_t)((drive_sense() ? 0x80 : 0) | (iwm_mode & 0x1F));  /* status */
+    else if (!q6 && !q7) rv = 0x00;          /* data register (GCR) — stub, next step */
+  }
+  tach_ctr++;
+  if (mac_iwm_hook) mac_iwm_hook(a, is_write, iwm_lines, is_write ? wv : rv);
+  return rv;
 }
 static uint8_t iwm_read(uint32_t a){ return iwm_access(a, 0, 0); }
 static void    iwm_write(uint32_t a, uint8_t v){ (void)iwm_access(a, 1, v); }

@@ -221,6 +221,25 @@ reach the Happy Mac in reasonable time) and full 512-wide hi-res are later
 work. The captured framebuffer contains Apple's Happy Mac artwork, so the
 generated tiles (and any screenshot) are gitignored, like the ROM.
 
+## M5 — disk boot to the desktop (in progress)
+
+The hard one. Groundwork done: System 1.1 downloaded + extracted (StuffIt→
+DiskCopy 4.2→ `core-c/tests/dc42.py` splits it into 800×512 sectors + tags;
+sector 0's `4C4B` 'LK' confirms it's bootable), and the IWM instrumented
+(`mac_iwm_hook`) to decode the Sony drive protocol: the ROM enables the motor,
+selects a drive register with CA0-2 + SEL (**SEL is VIA port A bit 5**, not the
+IWM SELECT line), reads it on the status SENSE bit, and strobes LSTRB to step.
+`mac.c` now models the sense registers (CSTIN/TK0/etc.) + head stepping.
+
+**Not yet booting:** the ROM does only a minimal periodic drive poll and hasn't
+triggered a boot-read — the disk-present detection point and exact sense
+polarity still need pinning (against MAME `sonydriv` / Mini vMac). Remaining:
+that, then **6-and-2 GCR track encoding** (sync `D5 AA 96` address + `D5 AA AD`
+data fields, variable sectors/track by zone: 12/11/10/9/8) fed through the IWM
+data register, so the `.Sony` driver reads the boot blocks → the System loads →
+Finder → desktop. A focused chunk; the IWM/GCR is the single hardest part of Mac
+emulation. Disk images are Apple/Apple-licensed — bring-your-own, gitignored.
+
 ## Legal
 
 The 64 KB Mac 128K ROM and the System 0.97 / Finder 1.0 disk are Apple
