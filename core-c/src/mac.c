@@ -240,15 +240,20 @@ static int sony_trap(void){
   } else if (mac_sony_hook) mac_sony_hook(tnum, m68k_read16(pb + 0x1A), 0);  /* csCode */
   m68k_write16(pb + 0x10, 0);                     /* ioResult = noErr */
   m68kc.d[0] = 0;
+  /* The real driver's IODone sets the CCR from the result code (TST D0) before
+  ** returning / calling the completion; the ROM relies on Z. Missing this Z
+  ** made a completion take a "moveq #0,D3" error branch that zeroed the map
+  ** block number and read the wrong sector. */
+  m68kc.sr = (uint16_t)((m68kc.sr & ~0x0Fu) | 0x04u);  /* Z=1 (noErr), N/V/C=0 */
 
   /* Emulate the driver's IODone. An asynchronous request carries a completion
   ** routine (ioCompletion, pb+0x0C != 0); the real driver would invoke it on
   ** I/O completion, and that routine advances the File Manager's mount/open
   ** state machine and ultimately clears the OUTER request's ioResult that the
   ** caller busy-waits on. Opcode-level interception skips the driver, so we run
-  ** the completion ourselves: jump to it (A0=pb, D0=result) with a return
-  ** address just past the trap word. Any further async reads it issues are
-  ** served and chained the same way, unwinding the whole operation. */
+  ** the completion ourselves: jump to it (A0=pb, D0=result, Z from result) with
+  ** a return address just past the trap word. Any further async reads it issues
+  ** are served and chained the same way, unwinding the whole operation. */
   if (op & 0x0400u) {                             /* async trap (bit 10) only */
     uint32_t iocompl = m68k_read32(pb + 0x0C);
     if (iocompl) {
@@ -259,10 +264,8 @@ static int sony_trap(void){
       return 1;
     }
   }
-  /* Synchronous request: caller continues inline; its BEQ/BNE needs Z from the
-  ** result code, which the real trap glue would have set. */
-  m68kc.sr = (uint16_t)((m68kc.sr & ~0x0Fu) | 0x04u);  /* Z=1 (noErr), N/V/C=0 */
-  m68kc.pc += 2;                                  /* skip the trap word */
+  /* Synchronous request: caller continues inline past the trap word. */
+  m68kc.pc += 2;
   return 1;
 }
 
