@@ -89,8 +89,11 @@ Three facts make it feasible, and all three are load-bearing:
   minimal VIA (overlay + IFR/IER) and IWM (mode-register probe). A genuine Mac
   128K ROM boots through power-on, RAM test, the overlay switch, QuickDraw, the
   gray desktop, and draws the Happy Mac. See result below.
-- **M4 — Framebuffer → SNES.** Mode-7 downscale spike, then crisp Mode 5/6
-  planar + dirty-rect. Gate: Happy Mac visible on real SNES output.
+- **M4 — Framebuffer → SNES. (done — Happy Mac on real SNES output.)** Host
+  boots the Mac, captures the framebuffer, and emits the center 256×224 crop as
+  2bpp tiles (`mkmacfb`); the SNES ROM (`snes/macvideo.c`, Mode 0) DMAs them to
+  VRAM and displays the Happy Mac in Mesen. See result below. (Full 512-wide
+  hi-res + a live on-SNES boot are later refinements.)
 - **M5 — Disk HLE → desktop.** Trap `.Sony`, serve sectors. Gate: System 0.97 +
   Finder 1.0 desktop on the SNES (slowly). *The* milestone.
 - **M6 — Mouse.** SNES pad → mouse move/click via VIA/SCC HLE. Keyboard stretch.
@@ -196,6 +199,27 @@ IWM status bit-5 spin, then its mode-register write/read-back probe, were the
 two gates to get past. Advancing to the flashing "insert disk" icon and loading
 a System is M5 (disk HLE). The ROM is Apple copyright — bring-your-own,
 gitignored at `roms/mac128k.rom`.
+
+## M4 — the Happy Mac on real SNES output
+
+The video path, proven end to end: `core-c/src/mkmacfb.c` boots the Mac on the
+host, captures the `$1A700` framebuffer, and emits the center 256×224 crop as
+SNES 2bpp tiles (a Mac framebuffer byte — 8 px, MSB-left, 1=black — *is* a valid
+plane-0 row; the crop is byte-aligned so it's a direct gather, no dedup needed:
+896 tiles < the 1024/BG limit). `snes/macvideo.c` (Mode 0, one 2bpp BG) DMAs the
+tiles to VRAM, writes an identity tilemap, sets a white/black palette, and turns
+the screen on. `make -C snes test-macvideo` runs it headless in Mesen; the Lua
+harness hex-dumps `emu.takeScreenshot()` (Mesen sandboxes `io`) and the shell
+decodes the PNG.
+
+**Result: the Happy Mac renders correctly on SNES output** — black-on-white on
+the gray checkerboard desktop, dead center. Two bring-up bugs: the DMA/geometry
+was right first try, but CGRAM (`$2122`) is a byte register — a 16-bit store put
+the high colour byte in `$2123` (garbage colours until fixed with two byte
+writes). A *live* boot on the SNES (the interpreter is far too slow at -O0 to
+reach the Happy Mac in reasonable time) and full 512-wide hi-res are later
+work. The captured framebuffer contains Apple's Happy Mac artwork, so the
+generated tiles (and any screenshot) are gitignored, like the ROM.
 
 ## Legal
 
