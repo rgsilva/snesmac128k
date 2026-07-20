@@ -1,0 +1,135 @@
+# snesmac — a Macintosh 128K on the SNES
+
+Boot a Macintosh 128K (Motorola 68000, 128 KB RAM, 512×342 1-bit screen) on a
+stock SNES. Slow is fine; "kinda broken" is fine. This is the third machine in
+the family after **snes86** (an 8086 PC booting MS-DOS) and **snespico8** (a
+PICO-8 runtime).
+
+## The core bet
+
+A Mac 128K sounds harder than the 8086 box, but it lands **closer to snespico8
+than to snes86**, because of one decision: the 68000 is written **once, in
+portable C, compiled to the 65816 with Calypsi** — not hand-written in 65816
+assembly. Hand-writing a 68000 interpreter in asm (8×32-bit data + 8×32-bit
+address registers, a huge addressing-mode matrix, 32-bit ALU on a 16-bit core)
+would be the project killer. snespico8 already proved the escape hatch: write
+the machine in C, let Calypsi compile it, eat the slowness.
+
+Three facts make it feasible, and all three are load-bearing:
+
+1. **The parity harness transfers.** [SingleStepTests/m68000](https://github.com/SingleStepTests/m68000)
+   provides TomHarte-style per-instruction JSON vectors for the 68000 — the same
+   family as the 8088 v2 vectors snes86's C core passes. CPU correctness becomes
+   the same solved-shape problem: set state → single-step → diff.
+2. **C-to-SNES is proven.** snespico8's Calypsi toolchain (`--core=65816
+   --target=snes --code-model=large -O0`), its cartridge-SRAM memory strategy,
+   and its Mesen `--testrunner` + mailbox harness all apply unchanged.
+3. **The memory problem is already solved.** snes86's BIGMEM build gives a
+   172 KB guest from WRAM + cart SRAM; snespico8 probes 256 KB of cart SRAM at
+   boot. The Mac's 128 KB RAM + 64 KB ROM is *smaller* than the 1 MB 8086 space
+   that already boots MS-DOS.
+
+## Architecture — which layer borrows from where
+
+| Layer                       | Approach                                          | Borrowed from |
+|-----------------------------|---------------------------------------------------|---------------|
+| 68000 CPU core              | portable C (Musashi), Calypsi → 65816             | snespico8     |
+| CPU correctness             | C core vs SingleStepTests/m68000 vectors          | snes86 (parity layer 1) |
+| SNES-build correctness      | same-source host ⇄ Mesen, state-hash parity       | snespico8 (`snesparity.sh`) |
+| Guest RAM > WRAM            | cartridge SRAM windows (→ SA-1 later)             | snespico8 `probe_sram` / snes86 BIGMEM |
+| Machine model (VIA/IWM/SCC) | **HLE**; host `runmac` shares the contract        | snes86 (`runpc`/`dosboot`) |
+| Machine correctness         | boot-trace lockstep vs Mini vMac / Musashi        | snes86 (`tracewin.sh`) |
+| Display                     | 512×342 1bpp → planar tiles, dirty-rect           | new (snespico8 DMA/mailbox scaffolding) |
+| Test automation             | Mesen `--testrunner` + Lua mailbox, RESULT PASS/FAIL | both       |
+
+## Hardware budget (Mac 128K → SNES)
+
+- **CPU** 68000 @ 7.83 MHz → interpreted in C on the 65816 @ 3.58 MHz. Expect
+  ~1000× slower than real: **tens of minutes to boot to desktop on stock**,
+  minutes on SA-1. A "watch it come alive" demo, not interactive computing.
+- **RAM** 128 KB, read/write → cartridge SRAM (the emulator's own C runtime
+  needs WRAM). The accessor functions translate the guest 24-bit address to
+  WRAM / SRAM-window / ROM / I/O, exactly like any machine emulator. SA-1's
+  linear 256 KB BW-RAM is the natural upgrade.
+- **ROM** 64 KB, read-only → cartridge ROM. Apple copyright: **bring-your-own**.
+- **Display** 512×342 1-bit → hi-res Mode 5/6 planar tiles. A Mac framebuffer
+  byte (8 px, MSB-left, 1=black) *is* a valid SNES 2bpp bitplane-0 row, so the
+  conversion is mostly a tile-major gather + zeroed 2nd plane. 512-wide needs
+  ≥2752 unique tiles vs the 1024/BG limit → blank-tile dedup + dirty-rect, with
+  an HDMA tile-base-swap or Mode-7 downscale fallback. Rendering is not the
+  bottleneck (the CPU is), so slow blits are fine.
+- **Disk/boot** 400 KB floppy → **HLE the ROM's `.Sony` driver**: serve sectors
+  from a disk image in cart ROM (writes → SRAM overlay). Don't emulate IWM GCR.
+- **Interrupts** generate the 60.15 Hz VBL so the cursor/Time Manager tick.
+- **Sound** deferred / never (Mac PWM → SNES APU is its own project).
+
+## Milestones
+
+- **M0 — Scaffold + Calypsi spike.** `core-c/` (C 68000 + host `runmac` + vector
+  runner) and `snes/` (Calypsi glue cloned from snespico8). Gate: a C stub
+  compiles to `.sfc`, runs in Mesen, drains the mailbox. *(hello.c ready.)*
+- **M1 — 68000 C core passes the m68000 vectors.** ← **the validation gate.**
+  Gate: 100% of normal execution; address-error-frame details and TAS/TRAPV are
+  documented divergences. *(done — see below.)*
+- **M1a — Musashi under Calypsi.** Spike: does the C core compile with cc65816
+  (16-bit `size_t`, `-O0`, no int64 hi-word)? If yes, huge shortcut; if not,
+  write a leaner single-step core. *(next.)*
+- **M2 — Parity harness (C ⇄ SNES).** Reuse snespico8's state-hash diff +
+  mailbox; same source both sides ⇒ catches Calypsi/glue bugs.
+- **M3 — Mac machine model, boot ROM on host.** Memory map (reset ROM-overlay,
+  VIA/IWM/SCC decode), VBL IRQ, HLE stubs; diff boot trace vs Mini vMac.
+- **M4 — Framebuffer → SNES.** Mode-7 downscale spike, then crisp Mode 5/6
+  planar + dirty-rect. Gate: Happy Mac visible on real SNES output.
+- **M5 — Disk HLE → desktop.** Trap `.Sony`, serve sectors. Gate: System 0.97 +
+  Finder 1.0 desktop on the SNES (slowly). *The* milestone.
+- **M6 — Mouse.** SNES pad → mouse move/click via VIA/SCC HLE. Keyboard stretch.
+- **M7 — Perf + SA-1 + release.** SA-1 for linear RAM + 3× speed; asm hot-paths;
+  BYO-ROM public build + copyright scrub (snes86 release-packaging playbook).
+
+## M1 — validation result
+
+The 68000 core is **Musashi** (Karl Stenerud, MIT), vendored under
+`core-c/musashi/`. The host harness `core-c/tests/m68ktest.c` wraps it as a
+ctypes-drivable dylib (`libem68k.dylib`); `core-c/tests/run_vectors.py` decodes
+the `.json.bin` vectors (via the repo's `decode.py` format) and single-steps
+each one — the same shape as snes86's `run_vectors.py` + `libem86.dylib`.
+
+Key conventions pinned during bring-up:
+- **PC/prefetch**: the vectors report PC 4 bytes ahead of the opcode (2-word
+  prefetch). Musashi runs with prefetch OFF and tracks true PC, so we set
+  `PC = initial.pc - 4` and compare `tm_get(PC) + 4`.
+- **A7 banking**: the vectors give `usp` and `ssp` separately; the active A7 is
+  selected by the SR supervisor bit. Set/read mode-aware.
+- **Single-step**: `m68k_pulse_reset()` burns the next `m68k_execute` on the
+  ~40-cycle reset sequence, so we reset once at init and per-test only clear the
+  `stopped`/`halted` flag (`m68kglue.c`).
+- **STOP PC**: STOP halts and suppresses the trailing prefetch, so its final PC
+  uses offset 0, not the usual +4 — special-cased.
+- **Write-log**: the harness logs every byte Musashi writes and zeros exactly
+  those between tests. Without it, stray writes not in a vector's final RAM
+  (e.g. an odd-address write that would fault on real HW) leak across the ~317k
+  tests of a single-process run and corrupt later ones.
+- **Config**: trace OFF (enabling it drops NOP 100%→49% — the vectors don't
+  model per-instruction trace the Musashi way) and **address-error emulation
+  OFF** (Musashi runs a slow runaway handler per odd-address fault, ~50× slower,
+  and can't single-step it cleanly; odd-address vectors then diverge fast and
+  bucket correctly from the *test's* expected final state).
+
+**Result (127 files, 317,500 vectors — `core-c/tests/build/FULLRUN.txt`):**
+**81.5% pass byte-exact; 100.000% accounted for; ZERO unexplained failures.**
+58 opcodes pass 100% exact. The remaining ~18% is entirely two benign,
+documented classes: (1) **56,982 odd-address faults** — the 68000 takes an
+address error, whose 14-byte frame Musashi only approximates vs the MAME
+microcode core that generated these vectors (irrelevant to well-behaved Mac
+code — an address error is a crash on real HW); (2) **1,624 undefined-result
+ops** — invalid-BCD inputs to ABCD/SBCD/NBCD, DIVU/DIVS overflow, CHK, LINK A7,
+and the vector authors' own known-bad TAS/TRAPV. Normal instruction execution
+and all normal exceptions match **exactly**. The 68000 core is validated.
+
+## Legal
+
+The 64 KB Mac 128K ROM and the System 0.97 / Finder 1.0 disk are Apple
+copyright, and — unlike MS-DOS (MIT-freed) — there is no freely-licensed Mac
+ROM. So the public build is **bring-your-own-ROM**: the emulator ships freely,
+but booting a real Mac OS needs the user's own dumps (or a homebrew 68000
+payload). Same copyright-scrub playbook as snes86's release packaging.
