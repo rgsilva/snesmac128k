@@ -13,8 +13,14 @@ static const uint32_t MSBSZ[5]  = {0, 0x80u, 0x8000u, 0, 0x80000000u};
 static uint16_t fetch16(void){ uint16_t w = m68k_read16(m68kc.pc); m68kc.pc += 2; return w; }
 static uint32_t fetch32(void){ uint32_t l = m68k_read32(m68kc.pc); m68kc.pc += 4; return l; }
 
+/* Explicit sign-extend of the low 8 bits to 32. Calypsi miscompiles the
+** (int8_t) cast of a value with bit 7 set (16->8->32 truncation+extend), which
+** silently broke short backward branches and negative MOVEQ — caught by the M2
+** SNES parity harness. This branchless form ((x^0x80)-0x80) sidesteps it. */
+static uint32_t sxt8(uint32_t v){ return (uint32_t)((int32_t)((v & 0xFFu) ^ 0x80u) - 128); }
+
 static uint32_t sext(uint32_t v, int size){
-  if (size == 1) return (uint32_t)(int32_t)(int8_t)v;
+  if (size == 1) return sxt8(v);
   if (size == 2) return (uint32_t)(int32_t)(int16_t)v;
   return v;
 }
@@ -69,7 +75,7 @@ static uint32_t ea_ad;
 
 static uint32_t ea_index_ext(uint32_t base){
   uint16_t ext = fetch16();
-  int32_t disp = (int8_t)(ext & 0xFF);
+  int32_t disp = (int32_t)sxt8(ext);
   int ri = (ext >> 12) & 7;
   uint32_t idx = (ext & 0x8000) ? m68kc.a[ri] : m68kc.d[ri];
   if (!(ext & 0x0800)) idx = (uint32_t)(int32_t)(int16_t)idx;
@@ -401,7 +407,7 @@ static void op_group4(uint16_t op){                  /* misc */
   if ((op & 0xFFB8) == 0x4880) {                     /* EXT */
     int dn = op & 7;
     if (op & 0x40) { m68kc.d[dn] = (uint32_t)(int32_t)(int16_t)m68kc.d[dn]; fl_logic(m68kc.d[dn], 4); }
-    else { uint32_t v = (uint32_t)(int32_t)(int8_t)m68kc.d[dn]; dreg_w(dn, 2, v); fl_logic(v, 2); }
+    else { uint32_t v = sxt8(m68kc.d[dn]); dreg_w(dn, 2, v); fl_logic(v, 2); }
     return;
   }
   if ((op & 0xF1C0) == 0x4180) {                     /* CHK.w */
@@ -609,14 +615,14 @@ void m68k_step(void){
       }
       break;
     case 0x6: {                                      /* Bcc/BRA/BSR */
-      int cond = (op >> 8) & 0xF; int32_t disp = (int8_t)(op & 0xFF); uint32_t base = m68kc.pc;
+      int cond = (op >> 8) & 0xF; int32_t disp = (int32_t)sxt8(op); uint32_t base = m68kc.pc;
       if ((op & 0xFF) == 0) disp = (int16_t)fetch16();   /* 68000: 0x00 => 16-bit disp; 0xFF is just -1 */
       if (cond == 1) { m68kc.a[7] -= 4; m68k_write32(m68kc.a[7], m68kc.pc); m68kc.pc = base + disp; }  /* BSR */
       else if (cond_true(cond)) m68kc.pc = base + disp;
       break;
     }
     case 0x7: {                                      /* MOVEQ */
-      int reg = (op >> 9) & 7; uint32_t v = (uint32_t)(int32_t)(int8_t)(op & 0xFF);
+      int reg = (op >> 9) & 7; uint32_t v = sxt8(op);
       m68kc.d[reg] = v; fl_logic(v, 4); break;
     }
     case 0x8: if (((op >> 4) & 0x1F) == 0x10 && ((op >> 6) & 3) == 0) op_bcd(op, 1); else op_alu_std(op, 0x8); break;

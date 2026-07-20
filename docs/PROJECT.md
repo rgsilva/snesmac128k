@@ -80,8 +80,9 @@ Three facts make it feasible, and all three are load-bearing:
 - **M1b — lean 68000 core. (done.)** `core-c/src/m68k.c` (~470 lines):
   `uint32_t` registers, bitfield dispatch (no 64K table). Compiles clean on
   Calypsi `--target=snes` (68 KB object). See result below.
-- **M2 — Parity harness (C ⇄ SNES).** Reuse snespico8's state-hash diff +
-  mailbox; same source both sides ⇒ catches Calypsi/glue bugs.
+- **M2 — Parity harness (C ⇄ SNES). (done.)** The Calypsi-compiled core runs on
+  the SNES (Mesen) and matches the host bit-for-bit. Caught two real Calypsi
+  bugs the host validation can't. See result below.
 - **M3 — Mac machine model, boot ROM on host.** Memory map (reset ROM-overlay,
   VIA/IWM/SCC decode), VBL IRQ, HLE stubs; diff boot trace vs Mini vMac.
 - **M4 — Framebuffer → SNES.** Mode-7 downscale spike, then crisp Mode 5/6
@@ -151,6 +152,25 @@ was a short bug hunt with the harness green at each step: the rotate type
 encoding (ROX↔RO swapped), CMPM's postincrement, Bcc's `0xFF` short displacement,
 UNLK A7, MOVEM's reversed predecrement order, and the `#imm` operand forms of
 BTST / MOVE-to-CCR. The lean core is validated.
+
+## M2 — SNES parity result
+
+A 68000 now runs *on the SNES*. A directed 68000 program + canonical state is
+executed by the same `m68k.c` on host and SNES (its 64 KB address space backed
+by WRAM bank $7F), folding the full register file into an FNV hash each step.
+The host build computes 64 per-step reference hashes; the Calypsi ROM computes
+its own, compares in C, and mails the first mismatch. Driver:
+`core-c/tests/parity_snes.sh` (→ `make -C snes test-parity`).
+
+**Result: PARITY OK** — identical hashes for all 64 steps. And the harness did
+its job, catching two Calypsi issues invisible to host-only testing:
+1. a 16-bit-int overflow in the 64 KB clear loop (`int i < 0x10000` never
+   terminates — Calypsi `int` is 16-bit); glue, fixed with a `uint32_t` counter.
+2. **`(int8_t)` sign-extension miscompiled** in the core — a value with bit 7
+   set didn't sign-extend, silently breaking every short *backward* branch and
+   negative `MOVEQ`. Fixed with a branchless `sxt8()` (`(x^0x80)-0x80`). This is
+   the M2 payoff: a codegen bug that passes all 317,500 host vectors but breaks
+   on real SNES hardware.
 
 ## Legal
 
