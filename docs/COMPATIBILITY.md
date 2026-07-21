@@ -32,10 +32,11 @@ not the software.
   functional milestone (see [FUTURE.md](FUTURE.md)).
 - **One disk, read-only.** A single 400 KB System floppy is served from the cartridge.
   Writes are acknowledged but not persisted; there's no second drive.
-- **The display is a 256×224 centre crop** of the 512×342 Mac screen, so it looks ~2×
-  zoomed and the screen edges are off-view. The SNES can't show the whole 1-bit screen
-  at once (a background addresses only 1024 tiles; the full screen is 2752); panning and
-  a fit-to-screen mode are planned.
+- **The display is a 256×224 window** into the 512×342 Mac screen (the SNES can't show
+  the whole 1-bit screen at once — a background addresses only 1024 tiles; the full
+  screen is 2752). The window **pans** — the **L/R** shoulder buttons and the **d-pad**
+  slide it, so you can reach the menu bar, the disk icon, and the Trash to frame a shot.
+  A "fit the whole screen at once" (downscaled) mode is still planned.
 - **System 2.0 is untested.** Only System 1.1 has been driven all the way to the desktop.
   Later Systems (and larger/800 KB disks) haven't been tried.
 

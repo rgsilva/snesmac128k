@@ -39,16 +39,16 @@ hardware (the VIA mouse lines and the keyboard) to the SNES controller:
 
 ## Make it fit the screen (display)
 
-The SNES shows a 256×224 centre crop of the 512×342 Mac screen, so it looks zoomed and
-the edges are off-view. The SNES can't show the whole 1-bit screen at once (a background
-addresses 1024 tiles; the full screen needs 2752), so:
+The SNES shows a 256×224 window of the 512×342 Mac screen. The SNES can't show the whole
+1-bit screen at once (a background addresses 1024 tiles; the full screen needs 2752), so:
 
-- **Pan** — the **L/R** shoulder buttons slide the 256×224 window across the Mac screen
-  (borrowing snes86's scroll-register + `read_pad` approach). Coarse re-crop first, then
-  smooth sub-tile scroll.
-- **Fit-to-screen toggle** — **X** or **START** downscales the full 512×342 into ~256×171
-  (OR-ing 2×2 pixel blocks so thin 1px menu lines survive) so you can see everything at
-  once, and back to 1:1 pan for detail.
+- **Pan — done.** The **L/R** shoulder buttons and the **d-pad** slide the window across
+  the Mac screen (8px horizontal steps, 4px vertical); the framebuffer read is done once
+  per row so it stays responsive on the slow CPU. Still to add: smooth sub-tile scroll
+  via the BG scroll registers.
+- **Fit-to-screen toggle** — **X** or **START** to downscale the full 512×342 into
+  ~256×171 (OR-ing 2×2 pixel blocks so thin 1px menu lines survive) so you can see
+  everything at once, and back to 1:1 pan for detail.
 
 ## Reach further
 

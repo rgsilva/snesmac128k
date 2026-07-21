@@ -183,10 +183,13 @@ The Mac framebuffer is 512×342, 1 bit per pixel, at `$1A700` in RAM. A set bit 
 instructions it rebuilds a 256×224 centre crop into a WRAM tile buffer — each Mac
 framebuffer byte becomes the plane-0 byte of a 2bpp tile (Mac 1 = colour 1 = black,
 plane 1 = 0) — and DMAs it to VRAM. A two-colour palette (white / black) and an identity
-tilemap complete a Mode-0 background. The crop is why the display looks ~2× zoomed: the
-SNES can only address 1024 tiles per background, so the full 512×342 (2752 unique tiles)
-can't be shown at once — panning and a fit-to-screen mode are on the roadmap
-([FUTURE.md](FUTURE.md)).
+tilemap complete a Mode-0 background. Only a 256×224 window is shown — the SNES can
+address just 1024 tiles per background, and the full 512×342 screen is 2752 unique tiles
+— so the window **pans** (the L/R shoulder buttons and the d-pad, read from the auto-read
+joypad). To stay responsive on the slow CPU, the per-refresh framebuffer read computes
+the SRAM window pointer once per row (rows align to the 8 KB windows) and reads across it
+with plain indexing, rather than the full window math per byte. A fit-to-screen
+(downscaled) mode is still on the roadmap ([FUTURE.md](FUTURE.md)).
 
 ---
 
