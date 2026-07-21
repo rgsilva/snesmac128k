@@ -270,6 +270,32 @@ Disk images and the ROM are Apple copyright — bring-your-own, gitignored; the
 desktop screenshot is likewise not committed. Next: try the System 2.0 disk
 (swap `roms/sys11_data.bin`), then the live-on-SNES port (M4b).
 
+## M4b — the live machine on the SNES (parity ✓, boot perf-bound)
+
+The machine model itself now runs on real hardware, not just the host. `mac.c`
+compiles `-DMAC_SNES` and, behind `RAM_RD/RAM_WR/ROM_RD/DISK_RD` macros, reaches
+a small SNES memory backend (`snes/macmem.c`): the Mac's **128 KB RAM lives in
+HiROM cart SRAM** (8 KB windows at banks `$20-$2F:6000-7FFF`), and the **64 KB
+ROM + 400 KB floppy are embedded in the cart ROM** at fixed offsets (`raw2sfc.py
+--at 0x080000 / 0x100000` → HiROM's linear map puts them at `$C80000` / `$D00000`
+for far-pointer reads).
+
+`snes/macparity.c` extends the M2 parity idea to the whole machine: it boots the
+real ROM for N steps on the SNES and compares a per-step cumulative CPU hash plus
+a final RAM hash against a host reference (`core-c/tests/macgenref.c`, shared fold
+in `macparity_hash.h`). **Result: PARITY OK — the SNES matches the host exactly**
+(cpu `303993EB` at N=500), so the SRAM/ROM backend and the machine model are
+faithful on Calypsi at `-O2`.
+
+`snes/macboot.c` is the live boot: it runs the machine and, every few thousand
+instructions, rebuilds a 256×224 crop of the framebuffer (in SRAM) into a WRAM
+tile buffer and DMAs it to VRAM — the M4 Mode-0 path, live. Verified running in
+Mesen (it boots and refreshes the display). But it is **slow**: ~tens-to-hundreds
+of 68000-steps/sec under `-O2`, so a full boot (~3M steps to the desktop) is tens
+of minutes to hours — the documented "~1000× slower". A live boot is a
+leave-it-running / background demo; **SA-1 + asm hot paths (M7) is the fix for a
+watchable boot.** `make -C snes macparity | macboot`.
+
 ## Legal
 
 The 64 KB Mac 128K ROM and the System 0.97 / Finder 1.0 disk are Apple
