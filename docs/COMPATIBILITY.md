@@ -27,9 +27,10 @@ not the software.
 
 ## What doesn't (yet)
 
-- **No mouse or keyboard input.** The machine boots and draws, but you can't drive the
-  Finder yet — the VIA mouse and keyboard lines aren't wired up. That's the next
-  functional milestone (see [FUTURE.md](FUTURE.md)).
+- **Mouse works; no keyboard yet.** The **d-pad** moves the cursor and **A** clicks — you
+  can pull down menus and click around the Finder. (The cursor lags, because the Mac only
+  redraws it on its VBL and the CPU is slow — fast-forward helps.) The **keyboard** isn't
+  wired up yet, so no typing; that's next (see [FUTURE.md](FUTURE.md)).
 - **One disk, read-only.** A single 400 KB System floppy is served from the cartridge.
   Writes are acknowledged but not persisted; there's no second drive.
 - **The display is a 256×224 window** into the 512×342 Mac screen (the SNES can't show

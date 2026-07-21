@@ -27,15 +27,16 @@ The interpreted 68000 runs at ~200 instructions/sec, so a boot is hours (see
   assembly and memory work, "tens of minutes" is realistic. This is milestone **M7**,
   alongside a bring-your-own-ROM public release.
 
-## Make it usable (input)
+## Make it usable (input) — milestone **M6**
 
-The Finder is drawn but inert. This is milestone **M6** — wiring the Mac's input
-hardware (the VIA mouse lines and the keyboard) to the SNES controller:
-
-- **Mouse** — the SNES D-pad (or a real SNES Mouse) drives the Mac cursor; a button
-  clicks.
-- **Virtual keyboard** — an on-screen keyboard, snes86-style: **SELECT** opens/closes
-  it, **A** confirms the highlighted key, keystrokes feed the Mac keyboard.
+- **Mouse — done.** The **d-pad** moves the cursor and **A** clicks: the position is
+  written straight into the Mac's low-memory mouse globals and the button into VIA PB3,
+  so menus pull down and the Finder responds. Still to do: smooth it out (the cursor
+  redraws only on the Mac's VBL, so it lags on the slow CPU), and maybe support a real
+  SNES Mouse peripheral.
+- **Keyboard** — an on-screen **virtual keyboard**, snes86-style: **SELECT** opens/closes
+  it, **A** confirms the highlighted key, keystrokes feed the Mac keyboard. This is the
+  remaining half of M6.
 
 ## Make it fit the screen (display)
 

@@ -19,6 +19,7 @@
 
 void     mac_init(const uint8_t *rom);   /* load 64 KB ROM, reset the CPU */
 void     mac_set_disk(const uint8_t *data, uint32_t size);  /* HLE floppy image (logical sectors) */
+void     mac_set_mouse(int x, int y, int btn);             /* HLE mouse: position + button (1=down) */
 void     mac_step(void);                 /* one CPU instruction + machine timers */
 int      mac_overlay(void);
 uint32_t mac_vbl_count(void);

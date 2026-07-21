@@ -50,6 +50,10 @@ uint8_t *mac_ram_ptr(void)   { return ram; }    /* host tools read the framebuff
 int mac_dbg_ier(void){ return via_ier; }
 int mac_dbg_ifr(void){ return via_ifr; }
 
+/* Mouse: position is injected into the low-memory globals (mac_set_mouse); the
+** button is VIA port B bit 3 (SW, low = pressed), read back below. */
+static int mouse_btn;                    /* 1 = pressed */
+
 static void via_update_irq(void){
   /* VIA (CA1=VBL, etc.) is wired to 68000 IPL level 1 */
   m68kc.irq = (via_ifr & via_ier & 0x7F) ? 1 : 0;
@@ -59,7 +63,7 @@ static void via_update_irq(void){
 static uint8_t via_read(uint32_t a){
   int reg = (int)((a >> 9) & 0xF);
   switch (reg) {
-    case 0:  return via_orb;
+    case 0:  return (uint8_t)((via_orb & ~0x08u) | (mouse_btn ? 0u : 0x08u));  /* PB3 = mouse SW */
     case 1:  case 15:                       /* IRA: PA4=overlay reads back its latch */
              return via_ora;
     case 2:  return via_ddrb;
@@ -225,6 +229,19 @@ static const uint8_t *disk_data;
 static uint32_t       disk_size;
 void mac_set_disk(const uint8_t *data, uint32_t size){ disk_data = data; disk_size = size; }
 void (*mac_sony_hook)(int tnum, uint32_t pos, uint32_t cnt) = 0;   /* host debugging */
+
+/* HLE the mouse: rather than emulate the quadrature hardware + its interrupts,
+** write the cursor position straight into the low-memory globals the ROM's VBL
+** cursor task follows (RawMouse / MTemp, a Point {v,h}) and flag CrsrNew so it
+** redraws; the button is a VIA PB3 line (above). x in [0,511], y in [0,341]. */
+void mac_set_mouse(int x, int y, int btn){
+  if (x < 0) x = 0; else if (x > 511) x = 511;
+  if (y < 0) y = 0; else if (y > 341) y = 341;
+  m68k_write16(0x0828u, (uint16_t)y); m68k_write16(0x082Au, (uint16_t)x);  /* MTemp   {v,h} */
+  m68k_write16(0x082Cu, (uint16_t)y); m68k_write16(0x082Eu, (uint16_t)x);  /* RawMouse{v,h} */
+  m68k_write8(0x08CEu, 0xFFu);                                             /* CrsrNew: moved */
+  mouse_btn = btn;
+}
 
 static int sony_trap(void){
   uint16_t op;

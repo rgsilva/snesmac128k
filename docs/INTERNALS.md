@@ -104,6 +104,14 @@ takes as a level-1 autovector interrupt. Without it the ROM's event loop never a
 state-machine lines and a mode register it writes and reads back). Actual disk I/O does
 *not* go through here — see the HLE below.
 
+**The mouse (also HLE).** Rather than emulate the quadrature encoders and their
+SCC/VIA interrupts, `mac_set_mouse(x, y, btn)` writes the cursor position straight into
+the ROM's low-memory mouse globals — `MTemp`/`RawMouse` (a QuickDraw `Point {v,h}`) and
+the `CrsrNew` flag — which the VBL cursor task then follows and redraws. The button is a
+real VIA line (port B bit 3, low = pressed), so the Event Manager posts mouse-down/up as
+usual and menus and clicks just work. (Validated on the host by clicking the 🍎 menu
+open; the SNES feeds it from the d-pad + A.)
+
 The core's `m68k_read*/write*` are `mac.c`'s bus decode, so the whole machine is just:
 `if (!sony_trap()) m68k_step();` per instruction, plus the VBL timer.
 

@@ -4,12 +4,12 @@
 ** buffer, DMA'd to VRAM — so the SNES shows the boot live (Happy Mac, "Welcome
 ** to Macintosh", then the Finder desktop). Same Mode-0 2bpp path as macvideo.c.
 **
-** The Mac screen is 512x342 but the SNES can only show a 256x224 window at 1:1
-** (a background addresses 1024 tiles; the full screen is 2752), so the window
-** PANS: hold the L shoulder and the d-pad slides it across the Mac screen. (The
-** d-pad on its own does nothing here — it's reserved for the mouse.) Panning is
-** driven by the auto-read joypad and redraws on demand, independent of the
-** (slow) emulated CPU, so it stays responsive even mid-boot.
+** Controls (auto-read joypad): the d-pad moves the MOUSE and A clicks; hold L
+** and the d-pad instead PANS the 256x224 window across the 512x342 Mac screen
+** (the SNES can't show it all at once — a background addresses 1024 tiles, the
+** whole screen is 2752). The mouse is HLE'd straight into the Mac's low-memory
+** globals (mac_set_mouse); the Mac redraws its own cursor on its VBL, so the
+** cursor lags on the slow CPU (fast-forward helps).
 **
 ** It is faithful but SLOW (a full boot is the documented tens-of-minutes-to-
 ** hours; SA-1 is the eventual fix) — a "leave it running, then pan and
@@ -37,6 +37,12 @@
 ** BYTES (x8 = pixels), 0..32; panY is the top edge in pixel rows, 0..118 — the
 ** slack over the 512x342 screen. Default: top-centre, so the menu bar shows. */
 static int panXb = 16, panY = 0;
+
+/* Mouse (the d-pad with L up): mx,my is the cursor in Mac screen coords
+** (0..511 / 0..341); A clicks. Fed to the Mac via mac_set_mouse; the Mac then
+** redraws its own cursor on its VBL, so it lags on the slow CPU. */
+#define MOUSE_STEP 4
+static int mx = 256, my = 171, last_btn = 0;
 
 /* DMA the WRAM tile buffer to VRAM word $1000 (A-bus WRAM -> B-bus $2118/$2119). */
 static void blit_tiles(void){
@@ -75,22 +81,36 @@ static void refresh(void){
   REG8(0x2100) = 0x0F;                  /* screen on */
 }
 
-/* Poll the auto-read joypad and pan. Panning is a MODE: hold the L shoulder and
-** the d-pad slides the window (left/right 8px, up/down 4px). With L not held the
-** d-pad does nothing here — it's reserved for the mouse. Returns 1 if the window
-** moved. */
-static int read_pad(void){
+/* Poll the auto-read joypad. Two modes: hold L and the d-pad PANS the window
+** (8px horiz / 4px vert); with L up the d-pad moves the MOUSE and A clicks.
+** Returns 1 if the display should be redrawn now (view moved, or the cursor /
+** button changed). */
+static int handle_input(void){
   uint16_t p = REG16(0x4218);          /* JOY1: B Y Sel St U D L R | A X L R .... */
-  int ox = panXb, oy = panY;
-  if (p & 0x0020u) {                   /* L held -> d-pad pans */
+  if (p & 0x0020u) {                   /* L held -> PAN */
+    int ox = panXb, oy = panY;
     if (p & 0x0200u) panXb--;          /* Left */
     if (p & 0x0100u) panXb++;          /* Right */
     if (p & 0x0800u) panY -= PANY_STEP; /* Up */
     if (p & 0x0400u) panY += PANY_STEP; /* Down */
+    if (panXb < 0) panXb = 0; else if (panXb > 32)  panXb = 32;
+    if (panY  < 0) panY  = 0; else if (panY  > 118) panY  = 118;
+    return (panXb != ox) || (panY != oy);
+  } else {                             /* MOUSE */
+    int omx = mx, omy = my, btn = (p & 0x0080u) ? 1 : 0;   /* A = click */
+    if (p & 0x0200u) mx -= MOUSE_STEP; /* Left */
+    if (p & 0x0100u) mx += MOUSE_STEP; /* Right */
+    if (p & 0x0800u) my -= MOUSE_STEP; /* Up */
+    if (p & 0x0400u) my += MOUSE_STEP; /* Down */
+    if (mx < 0) mx = 0; else if (mx > 511) mx = 511;
+    if (my < 0) my = 0; else if (my > 341) my = 341;
+    if (mx != omx || my != omy || btn != last_btn) {
+      mac_set_mouse(mx, my, btn);      /* position + button into the Mac */
+      last_btn = btn;
+      return 1;
+    }
+    return 0;
   }
-  if (panXb < 0) panXb = 0; else if (panXb > 32)  panXb = 32;
-  if (panY  < 0) panY  = 0; else if (panY  > 118) panY  = 118;
-  return (panXb != ox) || (panY != oy);  /* moved only if the clamp actually changed it */
 }
 
 static void video_init(void){
@@ -113,7 +133,7 @@ static void video_init(void){
 int main(void){
   uint32_t idle = 0;
   mb_init();
-  mb_puts("macboot: live Mac 128K on the SNES -- hold L + d-pad to pan\n");
+  mb_puts("macboot: live Mac 128K on the SNES -- d-pad: mouse, A: click, L+d-pad: pan\n");
   REG8(0x4200) = 0x01;                  /* enable auto joypad read (no NMI) */
   video_init();
   mac_init(0);                          /* ROM in cart, RAM (SRAM) cleared */
@@ -121,17 +141,16 @@ int main(void){
   refresh();                            /* first draw, screen on */
   for (;;) {
     mac_step();
-    if (read_pad()) {                   /* view moved: redraw now */
+    if (handle_input()) {               /* view/cursor changed: redraw now */
       refresh();
       idle = 0;
-      mb_puts("pan xb="); mb_puthex32((uint32_t)panXb);
-      mb_puts(" y="); mb_puthex32((uint32_t)panY); mb_putc('\n');
     } else if (++idle >= BOOT_REFRESH) { /* idle: redraw for boot progress */
       idle = 0;
       refresh();
-      mb_puts("pan xb="); mb_puthex32((uint32_t)panXb);
-      mb_puts(" y="); mb_puthex32((uint32_t)panY);
-      mb_puts(" vbl="); mb_puthex32(mac_vbl_count()); mb_putc('\n');
+      mb_puts("t vbl="); mb_puthex32(mac_vbl_count());
+      mb_puts(" pan="); mb_puthex32((uint32_t)panXb);
+      mb_puts(" mouse="); mb_puthex32((uint32_t)mx);
+      mb_putc(','); mb_puthex32((uint32_t)my); mb_putc('\n');
     }
   }
   return 0;
