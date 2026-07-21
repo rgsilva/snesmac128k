@@ -26,6 +26,3 @@ __pycache__/
 .DS_Store
 core-c/tests/parity_ref.h
 roms/
-
-# Screenshots of the Mac booting = Apple boot artwork (Happy Mac, System UI)
-docs/assets/*.png

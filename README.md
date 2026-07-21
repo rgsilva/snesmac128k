@@ -11,8 +11,7 @@ no expansion hardware, just a Super Nintendo (and a lot of patience).
 
 <p align="center">
   <img src="docs/assets/macboot_000.png" width="420" alt="The Happy Mac, rendered live on a SNES"><br>
-  <sub>The Happy Mac, booting live on the SNES. <em>(Screenshots are gitignored — that's Apple's boot
-  artwork; build and run to make your own.)</em></sub>
+  <sub>The Happy Mac, booting live on the SNES.</sub>
 </p>
 
 ## Wait, what?
