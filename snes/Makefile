@@ -119,5 +119,18 @@ macparity: $(BUILD)/macparity.sfc
 test-macparity: $(BUILD)/macparity.sfc
 	$(MESEN) --testrunner $(BUILD)/macparity.sfc test/macparity.lua
 
+# ---- the live boot: run the machine + draw the framebuffer, disk embedded ----
+$(BUILD)/macboot.o: macboot.c calypsi/mailbox.h ../core-c/src/mac.h | $(BUILD)
+	$(CC) -o $@ macboot.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
+$(BUILD)/macboot.raw: $(BUILD)/macheader.o $(BUILD)/mailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macmem.o $(BUILD)/macboot.o
+	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macboot.map $^
+$(BUILD)/macboot.sfc: $(BUILD)/macboot.raw tools/raw2sfc.py ../roms/mac128k.rom ../roms/sys11_data.bin
+	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom --at 0x100000 ../roms/sys11_data.bin
+
+.PHONY: macboot test-macboot
+macboot: $(BUILD)/macboot.sfc
+test-macboot: $(BUILD)/macboot.sfc
+	$(MESEN) --testrunner $(BUILD)/macboot.sfc test/macboot.lua
+
 clean:
 	rm -rf $(BUILD)
