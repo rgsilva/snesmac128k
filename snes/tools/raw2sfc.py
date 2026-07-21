@@ -4,12 +4,34 @@
 The linker emits one raw image starting at $C00000. Mesen wants full banks
 and a plausible header; we pad with 0xFF to the next power of two (min 128 KB)
 and patch the checksum/complement at $FFDC-$FFDF so header scoring is happy.
+
+Optional embedded blobs: `--at 0xOFFSET path/to/file` places a binary at a
+fixed ROM byte offset before checksumming. HiROM maps SNES $C00000+N linearly
+to ROM byte N, so the Mac ROM (--at 0x080000 => $C80000) and floppy image
+(--at 0x100000 => $D00000) are reachable by fixed far pointers (macmem.c).
 """
 import sys
 
 
-def main(src: str, dst: str) -> None:
+def main(argv) -> None:
+    src, dst = argv[0], argv[1]
+    blobs = []                       # (offset, bytes)
+    i = 2
+    while i < len(argv):
+        if argv[i] == "--at":
+            off = int(argv[i + 1], 0)
+            blobs.append((off, open(argv[i + 2], "rb").read()))
+            i += 3
+        else:
+            raise SystemExit(f"unknown arg {argv[i]}")
+
     data = bytearray(open(src, "rb").read())
+    for off, blob in blobs:
+        end = off + len(blob)
+        if end > len(data):
+            data.extend(b"\xff" * (end - len(data)))
+        data[off:end] = blob
+
     size = 128 * 1024
     while size < len(data):
         size *= 2
@@ -25,8 +47,9 @@ def main(src: str, dst: str) -> None:
     data[0xFFDF] = (chk >> 8) & 0xFF
 
     open(dst, "wb").write(data)
-    print(f"{dst}: {len(data) // 1024} KB, checksum {chk:#06x}")
+    extra = "".join(f" +{len(b)//1024}KB@{o:#08x}" for o, b in blobs)
+    print(f"{dst}: {len(data) // 1024} KB, checksum {chk:#06x}{extra}")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    main(sys.argv[1:])

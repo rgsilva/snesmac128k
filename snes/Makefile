@@ -83,5 +83,41 @@ macvideo: $(BUILD)/macvideo.sfc
 test-macvideo: $(BUILD)/macvideo.sfc
 	$(MESEN) --testrunner $(BUILD)/macvideo.sfc test/macvideo.lua
 
+# ---- M4b: the live Mac machine model on the SNES ----
+# mac.c compiled -DMAC_SNES: RAM in cart SRAM, ROM/disk embedded in cart ROM
+# (macmem.c). First a parity check vs the host (macparity), then the full boot.
+# -O2 for speed (the live boot is unusably slow at the -O0 correctness baseline);
+# the parity run re-validates correctness at -O2. The 68000 core is the hot path,
+# so it gets its own optimized object (macm68k.o) rather than the M2 -O0 one.
+MACSNES_CFLAGS := --core=65816 --target=snes $(MODEL) --no-ppu-mul -O2 -DMAC_SNES -I. $(M68INC) -I$(BUILD)
+MACP_N ?= 20000
+
+$(BUILD)/macheader.o: calypsi/macheader.s | $(BUILD)
+	$(AS) -o $@ $< $(AFLAGS)
+$(BUILD)/macm68k.o: ../core-c/src/m68k.c ../core-c/src/m68k.h | $(BUILD)
+	$(CC) -o $@ ../core-c/src/m68k.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
+$(BUILD)/mac.o: ../core-c/src/mac.c ../core-c/src/mac.h ../core-c/src/m68k.h | $(BUILD)
+	$(CC) -o $@ ../core-c/src/mac.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
+$(BUILD)/macmem.o: macmem.c | $(BUILD)
+	$(CC) -o $@ macmem.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
+
+# host reference: boot N steps, emit the CPU/RAM hashes the SNES must match
+$(BUILD)/macgenref: ../core-c/tests/macgenref.c ../core-c/src/mac.c ../core-c/src/m68k.c ../core-c/tests/macparity_hash.h | $(BUILD)
+	cc -O2 -std=c11 -I../core-c/src -I../core-c/tests -o $@ ../core-c/tests/macgenref.c ../core-c/src/mac.c ../core-c/src/m68k.c
+$(BUILD)/macparity_ref.h: $(BUILD)/macgenref ../roms/mac128k.rom
+	$(BUILD)/macgenref ../roms/mac128k.rom $(MACP_N) > $@
+
+$(BUILD)/macparity.o: macparity.c $(BUILD)/macparity_ref.h ../core-c/tests/macparity_hash.h calypsi/mailbox.h | $(BUILD)
+	$(CC) -o $@ macparity.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
+$(BUILD)/macparity.raw: $(BUILD)/macheader.o $(BUILD)/mailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macmem.o $(BUILD)/macparity.o
+	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macparity.map $^
+$(BUILD)/macparity.sfc: $(BUILD)/macparity.raw tools/raw2sfc.py ../roms/mac128k.rom
+	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom
+
+.PHONY: macparity test-macparity
+macparity: $(BUILD)/macparity.sfc
+test-macparity: $(BUILD)/macparity.sfc
+	$(MESEN) --testrunner $(BUILD)/macparity.sfc test/macparity.lua
+
 clean:
 	rm -rf $(BUILD)

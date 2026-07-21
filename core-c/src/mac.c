@@ -5,8 +5,28 @@
 #include <string.h>
 #include "mac.h"
 
+/* Memory backend. On the host, the Mac's RAM/ROM/disk are plain arrays and
+** pointers. On the SNES (-DMAC_SNES) a 128 KB array exceeds Calypsi's object
+** size limit and won't fit in WRAM beside the runtime, so RAM lives in cart
+** SRAM and ROM/disk in cart ROM, reached through accessor functions the SNES
+** main provides (mac_snesmem.c). Everything else in this file is identical. */
+#ifdef MAC_SNES
+uint8_t mac_ram_rd(uint32_t a);
+void    mac_ram_wr(uint32_t a, uint8_t v);
+uint8_t mac_rom_rd(uint32_t a);
+uint8_t mac_disk_rd(uint32_t a);
+#  define RAM_RD(a)     mac_ram_rd(a)
+#  define RAM_WR(a, v)  mac_ram_wr((a), (v))
+#  define ROM_RD(a)     mac_rom_rd(a)
+#  define DISK_RD(a)    mac_disk_rd(a)
+#else
 static uint8_t        ram[MAC_RAM_SIZE];
 static const uint8_t *rom;                 /* 64 KB */
+#  define RAM_RD(a)     ram[a]
+#  define RAM_WR(a, v)  (ram[a] = (v))
+#  define ROM_RD(a)     rom[a]
+#  define DISK_RD(a)    disk_data[a]
+#endif
 static int            overlay;             /* 1 at reset: ROM at $0 */
 static uint32_t       vbl_count;
 static uint32_t       instr_count;
@@ -24,7 +44,9 @@ static uint16_t via_t1, via_t2;
 
 int      mac_overlay(void)   { return overlay; }
 uint32_t mac_vbl_count(void) { return vbl_count; }
-uint8_t *mac_ram_ptr(void)   { return ram; }
+#ifndef MAC_SNES
+uint8_t *mac_ram_ptr(void)   { return ram; }    /* host tools read the framebuffer here */
+#endif
 int mac_dbg_ier(void){ return via_ier; }
 int mac_dbg_ifr(void){ return via_ifr; }
 
@@ -147,9 +169,9 @@ static uint8_t scc_read(uint32_t a){ (void)a; return 0x00; }
 /* ---- 24-bit address decode ---- */
 static uint8_t bus_read(uint32_t a){
   a &= 0xFFFFFF;
-  if (a < 0x400000) return overlay ? rom[a & 0xFFFF] : ram[a & 0x1FFFF];
-  if (a < 0x500000) return rom[a & 0xFFFF];                        /* ROM $400000 */
-  if (a >= 0x600000 && a < 0x800000) return overlay ? ram[a & 0x1FFFF] : 0xFF;
+  if (a < 0x400000) return overlay ? ROM_RD(a & 0xFFFF) : RAM_RD(a & 0x1FFFF);
+  if (a < 0x500000) return ROM_RD(a & 0xFFFF);                     /* ROM $400000 */
+  if (a >= 0x600000 && a < 0x800000) return overlay ? RAM_RD(a & 0x1FFFF) : 0xFF;
   if (a >= 0x800000 && a < 0xA00000) return scc_read(a);
   if (a >= 0xC00000 && a < 0xE00000) return iwm_read(a);
   if (a >= 0xE80000) return via_read(a);
@@ -157,8 +179,8 @@ static uint8_t bus_read(uint32_t a){
 }
 static void bus_write(uint32_t a, uint8_t v){
   a &= 0xFFFFFF;
-  if (a < 0x400000) { if (!overlay) ram[a & 0x1FFFF] = v; return; }
-  if (a >= 0x600000 && a < 0x800000) { if (overlay) ram[a & 0x1FFFF] = v; return; }
+  if (a < 0x400000) { if (!overlay) RAM_WR(a & 0x1FFFF, v); return; }
+  if (a >= 0x600000 && a < 0x800000) { if (overlay) RAM_WR(a & 0x1FFFF, v); return; }
   if (a >= 0xC00000 && a < 0xE00000) { iwm_write(a, v); return; }
   if (a >= 0xE80000) { via_write(a, v); return; }
   /* ROM / SCC writes: ignore for now */
@@ -175,8 +197,13 @@ void m68k_write32(uint32_t a, uint32_t v){
   bus_write(a, (uint8_t)(v >> 24)); bus_write(a+1, (uint8_t)(v >> 16)); bus_write(a+2, (uint8_t)(v >> 8)); bus_write(a+3, (uint8_t)v); }
 
 void mac_init(const uint8_t *rom_){
+#ifdef MAC_SNES
+  (void)rom_;                                     /* ROM is fixed in cart, via mac_rom_rd */
+  { uint32_t i; for (i = 0; i < MAC_RAM_SIZE; i++) mac_ram_wr(i, 0); }
+#else
   rom = rom_;
   memset(ram, 0, sizeof ram);
+#endif
   overlay = 1;
   via_orb = via_ora = via_ddrb = via_ddra = 0;
   via_ifr = via_ier = via_acr = via_pcr = via_sr = 0;
@@ -203,7 +230,7 @@ static int sony_trap(void){
   uint16_t op;
   int tnum, refnum;
   uint32_t pb;
-  if (!disk_data) return 0;
+  if (!disk_size) return 0;
   op = m68k_read16(m68kc.pc);
   if ((op & 0xF800u) != 0xA000u) return 0;       /* not an OS (Device Manager) trap */
   tnum = op & 0xFF;
@@ -234,7 +261,7 @@ static int sony_trap(void){
     uint32_t pos = m68k_read32(pb + 0x2E);        /* ioPosOffset (byte offset) */
     uint32_t k;
     for (k = 0; k < cnt; k++)
-      m68k_write8(buf + k, (pos + k < disk_size) ? disk_data[pos + k] : 0);
+      m68k_write8(buf + k, (pos + k < disk_size) ? DISK_RD(pos + k) : 0);
     m68k_write32(pb + 0x28, cnt);                 /* ioActCount */
     if (mac_sony_hook) mac_sony_hook(tnum, pos, cnt);
   } else if (mac_sony_hook) mac_sony_hook(tnum, m68k_read16(pb + 0x1A), 0);  /* csCode */
