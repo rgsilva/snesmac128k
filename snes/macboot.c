@@ -42,7 +42,9 @@ static int panXb = 16, panY = 0;
 ** (0..511 / 0..341); A clicks. Fed to the Mac via mac_set_mouse; the Mac then
 ** redraws its own cursor on its VBL, so it lags on the slow CPU. */
 #define MOUSE_STEP 4
+#define CLICK_HOLD 16000              /* hold a tap of A down > one VBL (12000) so it's seen */
 static int mx = 256, my = 171, last_btn = 0;
+static uint32_t click_hold = 0;
 
 /* DMA the WRAM tile buffer to VRAM word $1000 (A-bus WRAM -> B-bus $2118/$2119). */
 static void blit_tiles(void){
@@ -97,13 +99,16 @@ static int handle_input(void){
     if (panY  < 0) panY  = 0; else if (panY  > 118) panY  = 118;
     return (panXb != ox) || (panY != oy);
   } else {                             /* MOUSE */
-    int omx = mx, omy = my, btn = (p & 0x0080u) ? 1 : 0;   /* A = click */
+    int omx = mx, omy = my, a = (p & 0x0080u) ? 1 : 0, btn;
+    if (a) click_hold = CLICK_HOLD;    /* A held tops it up; a tap decays over CLICK_HOLD */
+    btn = (a || click_hold) ? 1 : 0;   /* so the button stays down long enough to span a VBL */
     if (p & 0x0200u) mx -= MOUSE_STEP; /* Left */
     if (p & 0x0100u) mx += MOUSE_STEP; /* Right */
     if (p & 0x0800u) my -= MOUSE_STEP; /* Up */
     if (p & 0x0400u) my += MOUSE_STEP; /* Down */
     if (mx < 0) mx = 0; else if (mx > 511) mx = 511;
     if (my < 0) my = 0; else if (my > 341) my = 341;
+    if (click_hold) click_hold--;
     if (mx != omx || my != omy || btn != last_btn) {
       mac_set_mouse(mx, my, btn);      /* position + button into the Mac */
       last_btn = btn;
