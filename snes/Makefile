@@ -119,6 +119,33 @@ macparity: $(BUILD)/macparity.sfc
 test-macparity: $(BUILD)/macparity.sfc
 	$(MESEN) --testrunner $(BUILD)/macparity.sfc test/macparity.lua
 
+# ---- bench: OUR OWN 68000 ROM (bench/mkbenchrom.py — no Apple bytes) ----
+# benchhost prints the golden per-phase instruction counts + CRC; macbench runs
+# the same ROM on the SNES and test/macbench.lua stamps frames per phase.
+# See docs/PERF.md. test-bench asserts host CRC == SNES CRC.
+$(BUILD)/benchrom.bin: ../bench/mkbenchrom.py | $(BUILD)
+	python3 ../bench/mkbenchrom.py $@
+$(BUILD)/benchhost: ../core-c/tests/benchhost.c ../core-c/src/mac.c ../core-c/src/m68k.c | $(BUILD)
+	cc -O2 -std=c11 -I../core-c/src -o $@ ../core-c/tests/benchhost.c ../core-c/src/mac.c ../core-c/src/m68k.c
+$(BUILD)/macbench.o: macbench.c calypsi/mailbox.h ../core-c/src/mac.h | $(BUILD)
+	$(CC) -o $@ macbench.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
+$(BUILD)/macbench.raw: $(BUILD)/macheader.o $(BUILD)/mailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macmem.o $(BUILD)/macbench.o
+	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macbench.map $^
+$(BUILD)/macbench.sfc: $(BUILD)/macbench.raw tools/raw2sfc.py $(BUILD)/benchrom.bin
+	python3 tools/raw2sfc.py $< $@ --at 0x080000 $(BUILD)/benchrom.bin
+
+.PHONY: macbench bench-host test-bench
+macbench: $(BUILD)/macbench.sfc
+bench-host: $(BUILD)/benchhost $(BUILD)/benchrom.bin
+	$(BUILD)/benchhost $(BUILD)/benchrom.bin
+test-bench: $(BUILD)/macbench.sfc $(BUILD)/benchhost
+	$(BUILD)/benchhost $(BUILD)/benchrom.bin | tee $(BUILD)/bench_host.txt
+	$(MESEN) --testrunner $(BUILD)/macbench.sfc test/macbench.lua | tee $(BUILD)/bench_snes.txt
+	@h=$$(grep '^CRC' $(BUILD)/bench_host.txt | awk '{print $$2}'); \
+	 s=$$(grep 'OUT CRC' $(BUILD)/bench_snes.txt | awk '{print $$3}'); \
+	 if [ -n "$$h" ] && [ "$$h" = "$$s" ]; then echo "BENCH CRC MATCH $$h"; \
+	 else echo "BENCH CRC MISMATCH host=$$h snes=$$s"; exit 1; fi
+
 # ---- the live boot: run the machine + draw the framebuffer, disk embedded ----
 $(BUILD)/macboot.o: macboot.c calypsi/mailbox.h ../core-c/src/mac.h | $(BUILD)
 	$(CC) -o $@ macboot.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)

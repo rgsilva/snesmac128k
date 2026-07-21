@@ -176,3 +176,19 @@ screen, same VBL ballpark) replace parity, and they stay behind
 Estimates above are honest guesses ranked by measured evidence; the bench
 exists precisely because the last "obvious" perf idea (`<<3` vs `*0x10000`)
 turned out to compile to the identical runtime call. Measure, land, repeat.
+
+## 6. Results
+
+`make -C snes test-bench` (fresh Mesen). Total = frames from phase 1 to done
+(13,985 instructions); columns are frames per phase (fewer = faster). The
+CRC must print `A97233CE` on both host and SNES, every row.
+
+| change | total | nop | alu | ram.b | ram.w | ram.l | shift | muldiv | copy | fbfill | ≈instr/s |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| baseline (`63e1e1c`) | 2234 | 136 | 163 | 163 | 175 | 192 | 176 | 110 | 125 | 952 | 376 |
+
+Reading the baseline: a bare NOP costs ~44,600 master clocks — the floor
+every instruction pays (two full fetch16s: the real one plus the sony-trap
+guard's, the per-step modulo, dispatch). The spread up to ram.l/copy
+(~63–77k) is the byte-wise window tax; muldiv's 72k is the runtime
+mul/div helpers on top of the floor.
