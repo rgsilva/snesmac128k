@@ -185,8 +185,9 @@ framebuffer byte becomes the plane-0 byte of a 2bpp tile (Mac 1 = colour 1 = bla
 plane 1 = 0) — and DMAs it to VRAM. A two-colour palette (white / black) and an identity
 tilemap complete a Mode-0 background. Only a 256×224 window is shown — the SNES can
 address just 1024 tiles per background, and the full 512×342 screen is 2752 unique tiles
-— so the window **pans** (the L/R shoulder buttons and the d-pad, read from the auto-read
-joypad). To stay responsive on the slow CPU, the per-refresh framebuffer read computes
+— so the window **pans** (hold the L shoulder and use the d-pad, read from the auto-read
+joypad; the d-pad alone is reserved for the mouse). To stay responsive on the slow CPU,
+the per-refresh framebuffer read computes
 the SRAM window pointer once per row (rows align to the 8 KB windows) and reads across it
 with plain indexing, rather than the full window math per byte. A fit-to-screen
 (downscaled) mode is still on the roadmap ([FUTURE.md](FUTURE.md)).

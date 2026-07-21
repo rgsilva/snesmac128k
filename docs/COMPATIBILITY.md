@@ -34,9 +34,10 @@ not the software.
   Writes are acknowledged but not persisted; there's no second drive.
 - **The display is a 256×224 window** into the 512×342 Mac screen (the SNES can't show
   the whole 1-bit screen at once — a background addresses only 1024 tiles; the full
-  screen is 2752). The window **pans** — the **L/R** shoulder buttons and the **d-pad**
-  slide it, so you can reach the menu bar, the disk icon, and the Trash to frame a shot.
-  A "fit the whole screen at once" (downscaled) mode is still planned.
+  screen is 2752). The window **pans** — **hold L** and the **d-pad** slides it, so you
+  can reach the menu bar, the disk icon, and the Trash to frame a shot (the d-pad on its
+  own is reserved for the mouse). A "fit the whole screen at once" (downscaled) mode is
+  still planned.
 - **System 2.0 is untested.** Only System 1.1 has been driven all the way to the desktop.
   Later Systems (and larger/800 KB disks) haven't been tried.
 
