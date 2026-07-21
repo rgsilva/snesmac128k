@@ -7,7 +7,11 @@ you **can't touch it** yet. Roughly in priority order:
 ## Make it watchable (performance)
 
 The interpreted 68000 runs at ~200 instructions/sec, so a boot is hours (see
-[COMPATIBILITY.md](COMPATIBILITY.md)). The levers, smallest to biggest:
+[COMPATIBILITY.md](COMPATIBILITY.md)). **The plan of record is [PERF.md](PERF.md)** —
+a measured cost breakdown (the opcode is fetched twice per instruction, a 32-bit
+modulo runs per step, the ROM is mapped SlowROM…), a ranked fix list, and a
+committable Apple-free 68000 bench ROM that gives every change a hard
+cycles-per-instruction number. The levers, smallest to biggest:
 
 - **Rewrite the hot path in assembly.** The fetch/decode/dispatch inner loop and the
   memory accessors are the cost centre; Calypsi's `-O2` C is fine but not tight. Hand
