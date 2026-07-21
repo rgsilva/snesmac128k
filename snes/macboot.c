@@ -6,9 +6,10 @@
 **
 ** The Mac screen is 512x342 but the SNES can only show a 256x224 window at 1:1
 ** (a background addresses 1024 tiles; the full screen is 2752), so the window
-** PANS: the L/R shoulder buttons and the d-pad slide it across the Mac screen.
-** Panning is driven by the auto-read joypad and redraws on demand, independent
-** of the (slow) emulated CPU, so it stays responsive even mid-boot.
+** PANS: hold the L shoulder and the d-pad slides it across the Mac screen. (The
+** d-pad on its own does nothing here — it's reserved for the mouse.) Panning is
+** driven by the auto-read joypad and redraws on demand, independent of the
+** (slow) emulated CPU, so it stays responsive even mid-boot.
 **
 ** It is faithful but SLOW (a full boot is the documented tens-of-minutes-to-
 ** hours; SA-1 is the eventual fix) — a "leave it running, then pan and
@@ -74,16 +75,19 @@ static void refresh(void){
   REG8(0x2100) = 0x0F;                  /* screen on */
 }
 
-/* Poll the auto-read joypad and pan. L/R shoulders or d-pad left/right move the
-** window horizontally (8px steps); d-pad up/down move it vertically. Returns 1
-** if the window moved. */
+/* Poll the auto-read joypad and pan. Panning is a MODE: hold the L shoulder and
+** the d-pad slides the window (left/right 8px, up/down 4px). With L not held the
+** d-pad does nothing here — it's reserved for the mouse. Returns 1 if the window
+** moved. */
 static int read_pad(void){
   uint16_t p = REG16(0x4218);          /* JOY1: B Y Sel St U D L R | A X L R .... */
   int ox = panXb, oy = panY;
-  if (p & (0x0200u | 0x0020u)) panXb--;                   /* d-pad Left  / L shoulder */
-  if (p & (0x0100u | 0x0010u)) panXb++;                   /* d-pad Right / R shoulder */
-  if (p & 0x0800u) panY -= PANY_STEP;                     /* d-pad Up */
-  if (p & 0x0400u) panY += PANY_STEP;                     /* d-pad Down */
+  if (p & 0x0020u) {                   /* L held -> d-pad pans */
+    if (p & 0x0200u) panXb--;          /* Left */
+    if (p & 0x0100u) panXb++;          /* Right */
+    if (p & 0x0800u) panY -= PANY_STEP; /* Up */
+    if (p & 0x0400u) panY += PANY_STEP; /* Down */
+  }
   if (panXb < 0) panXb = 0; else if (panXb > 32)  panXb = 32;
   if (panY  < 0) panY  = 0; else if (panY  > 118) panY  = 118;
   return (panXb != ox) || (panY != oy);  /* moved only if the clamp actually changed it */
@@ -109,7 +113,7 @@ static void video_init(void){
 int main(void){
   uint32_t idle = 0;
   mb_init();
-  mb_puts("macboot: live Mac 128K on the SNES -- L/R + d-pad to pan\n");
+  mb_puts("macboot: live Mac 128K on the SNES -- hold L + d-pad to pan\n");
   REG8(0x4200) = 0x01;                  /* enable auto joypad read (no NMI) */
   video_init();
   mac_init(0);                          /* ROM in cart, RAM (SRAM) cleared */
