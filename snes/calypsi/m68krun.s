@@ -12,19 +12,17 @@
 ;;; the state m68k_exec expects.
 ;;;
 ;;; Native coverage: NOP; MOVEQ (all 16 top bytes — the C decodes bit 8 as
-;;; don't-care, mirrored here); the full Bcc/BRA set (all 14 conditions +
-;;; BRA; BSR punts); ADDQ/SUBQ #d,An (no flags); DBRA (DBF); the long
+;;; don't-care, mirrored here); DBRA (DBF); the full Bcc/BRA set (all 14
+;;; conditions), BSR.b and JSR (An); ADDQ/SUBQ #d,An (no flags); the long
 ;;; register-direct ALU — ADD/SUB/CMP/AND/OR.L Dn,Dn and ADDQ/SUBQ.L #d,Dn,
-;;; with N/V/Z/C/X taken from the 65816 ALU (item 5e); and MOVE.W/.L between
-;;; {Dn,An,(An),(An)+} over the two-region RAM fast path (item 5f — MOVE.B/.W/.L,
-;;; one memory operand, clean RAM only; mem->mem, ROM/IO, odd word/long,
-;;; overlay-on and the wider addressing modes all punt); and the subroutine
-;;; call/return set
-;;; (item 5g) — RTS, BSR.b and JSR (An), the stack read/write reusing the same
-;;; RAM fast path (BSR.w and abs/disp/index JSR punt). Slow path (pending irq,
-;;; STOP, fetch-cache miss, extension word beyond the cached window): the full
-;;; C m68k_step / m68k_exec. Next candidates: byte/word ALU, MOVE.B and
-;;; ROM-source MOVE, CMPI, JSR with a fetched EA.
+;;; with N/V/Z/C/X taken from the 65816 ALU (item 5e); MOVE.B/.W/.L between
+;;; {Dn,An,(An),(An)+} over the two-region RAM fast path (item 5f — one memory
+;;; operand, clean RAM only); RTS (item 5g, the stack read/write reuse that RAM
+;;; path); and LSL/LSR/ROL/ROR.L Dn by an immediate count (item 5h). Punting:
+;;; mem->mem / ROM-source / odd MOVE, BSR.w and abs/disp/index JSR, AS/ROX and
+;;; register-count shifts, byte/word register ALU, everything with a fetched
+;;; extension word (CMPI, immediate ALU) — all fall to the slow path (also:
+;;; pending irq, STOP, fetch-cache miss): the full C m68k_step / m68k_exec.
 ;;;
 ;;; Everything lives in the direct page (item 5a): m68kc (pc +64, sr +76,
 ;;; stopped|irq word +78; sizeof==80 packed, verified), the fetch cache,
@@ -110,8 +108,11 @@ d3:           cmp     ##0x4e          ; $4E: NOP (RTS/JSR/... punt)
 d4:           cmp     ##0x80          ; $80-$DF: register-direct ALU
               bcc     d5              ; (h_alu validates: opmode 2 long, mode 0 Dn)
               cmp     ##0xe0
-              bcs     punt
+              bcs     d4a
               jmp     long:h_alu
+d4a:          cmp     ##0xf0          ; $E0-$EF: register shifts (h_shift validates)
+              bcs     punt            ; $F0-$FF: line-F -> C
+              jmp     long:h_shift
 d5:           cmp     ##0x10          ; $10-$3F: MOVE.b/.w/.l (h_move validates)
               bcc     punt
               cmp     ##0x40
@@ -1181,6 +1182,145 @@ mv_ptr_lo:    lda     dp:.tiny mv_a_lo
 mv_ptr_no:    clc
               rtl
 
+;;; ---- $E0-$EF: register shifts, long by immediate count (item 5h) ----
+;; LSL/LSR/ROL/ROR.L Dn, #cnt (cnt 1-8). AS (the V-flag case), ROX (X-through),
+;; register counts, byte/word and memory shifts all punt. Loop the count doing
+;; a 32-bit shift-by-1 in two 16-bit halves, capturing the last bit shifted out
+;; in shift_c for C. LS sets X=C; RO leaves X. V=0; N/Z from the result.
+h_shift:      lda     dp:.tiny cur_op
+              and     ##0x00c0
+              cmp     ##0x0080        ; long (size 2) only
+              beq     sh_long
+              jmp     long:punt
+sh_long:      lda     dp:.tiny cur_op
+              and     ##0x0020        ; ir (bit 5): 1 = register count -> C
+              beq     sh_imm
+              jmp     long:punt
+sh_imm:       lda     dp:.tiny cur_op ; count = cr==0 ? 8 : cr ; cr = bits 11-9
+              xba
+              and     ##0x000e
+              lsr     a
+              bne     sh_cnt
+              lda     ##8
+sh_cnt:       sta     dp:.tiny shift_cnt
+              lda     dp:.tiny cur_op ; load Dn (reg = op&7) -> r_lo/r_hi
+              and     ##0x0007
+              asl     a
+              asl     a
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              sta     dp:.tiny r_lo
+              lda     dp:.tiny (m68kc+2),x
+              sta     dp:.tiny r_hi
+              lda     dp:.tiny cur_op ; type<<3 (bits 4-3): LS=0x08 RO=0x18
+              and     ##0x0018
+              cmp     ##0x0008
+              beq     sh_ls
+              cmp     ##0x0018
+              beq     sh_ro
+              jmp     long:punt       ; AS / ROX -> C
+sh_ls:        lda     dp:.tiny cur_op ; dir (bit 8): 1 = left
+              and     ##0x0100
+              bne     sh_lsl
+              jmp     long:sh_lsr
+sh_ro:        lda     dp:.tiny cur_op
+              and     ##0x0100
+              bne     sh_rol
+              jmp     long:sh_ror
+sh_lsl:       ldy     dp:.tiny shift_cnt
+sh_lsl_lp:    asl     dp:.tiny r_lo
+              rol     dp:.tiny r_hi
+              lda     ##0
+              rol     a               ; A = C (bit shifted out of bit 31)
+              sta     dp:.tiny shift_c
+              dey
+              bne     sh_lsl_lp
+              jmp     long:sh_commit_ls
+sh_lsr:       ldy     dp:.tiny shift_cnt
+sh_lsr_lp:    lsr     dp:.tiny r_hi
+              ror     dp:.tiny r_lo
+              lda     ##0
+              rol     a               ; A = C (bit shifted out of bit 0)
+              sta     dp:.tiny shift_c
+              dey
+              bne     sh_lsr_lp
+              jmp     long:sh_commit_ls
+sh_rol:       ldy     dp:.tiny shift_cnt
+sh_rol_lp:    asl     dp:.tiny r_lo
+              rol     dp:.tiny r_hi
+              lda     ##0
+              rol     a               ; out bit = old bit 31
+              sta     dp:.tiny shift_c
+              lda     dp:.tiny r_lo    ; wrap it into bit 0
+              ora     dp:.tiny shift_c
+              sta     dp:.tiny r_lo
+              dey
+              bne     sh_rol_lp
+              jmp     long:sh_commit_ro
+sh_ror:       ldy     dp:.tiny shift_cnt
+sh_ror_lp:    lsr     dp:.tiny r_hi
+              ror     dp:.tiny r_lo
+              lda     ##0
+              rol     a               ; out bit = old bit 0
+              sta     dp:.tiny shift_c
+              beq     sh_ror_nw
+              lda     dp:.tiny r_hi    ; wrap it into bit 31
+              ora     ##0x8000
+              sta     dp:.tiny r_hi
+sh_ror_nw:    dey
+              bne     sh_ror_lp
+              jmp     long:sh_commit_ro
+;; commit: writeback r -> Dn (long); C = shift_c, V=0, N/Z from r. LS: X=C.
+sh_commit_ls: lda     dp:.tiny cur_op
+              and     ##0x0007
+              asl     a
+              asl     a
+              tax
+              lda     dp:.tiny r_lo
+              sta     dp:.tiny (m68kc+0),x
+              lda     dp:.tiny r_hi
+              sta     dp:.tiny (m68kc+2),x
+              lda     dp:.tiny (m68kc+SR_OFF)
+              and     ##0xffe0        ; clear X,N,Z,V,C
+              sta     dp:.tiny sr_tmp
+              lda     dp:.tiny shift_c
+              beq     sh_ls_skip
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0011        ; C + X
+              sta     dp:.tiny sr_tmp
+sh_ls_skip:   jmp     long:sh_nz
+sh_commit_ro: lda     dp:.tiny cur_op
+              and     ##0x0007
+              asl     a
+              asl     a
+              tax
+              lda     dp:.tiny r_lo
+              sta     dp:.tiny (m68kc+0),x
+              lda     dp:.tiny r_hi
+              sta     dp:.tiny (m68kc+2),x
+              lda     dp:.tiny (m68kc+SR_OFF)
+              and     ##0xfff0        ; clear N,Z,V,C ; keep X (RO leaves X)
+              sta     dp:.tiny sr_tmp
+              lda     dp:.tiny shift_c
+              beq     sh_nz
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0001        ; C only
+              sta     dp:.tiny sr_tmp
+sh_nz:        lda     dp:.tiny r_hi   ; N from bit 31
+              bpl     sh_non
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0008
+              sta     dp:.tiny sr_tmp
+sh_non:       lda     dp:.tiny r_lo   ; Z from all 32 bits
+              ora     dp:.tiny r_hi
+              bne     sh_noz
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0004
+              sta     dp:.tiny sr_tmp
+sh_noz:       lda     dp:.tiny sr_tmp
+              sta     dp:.tiny (m68kc+SR_OFF)
+              jmp     long:tick
+
 ;;; ---- the 256-entry top-byte dispatch table (16-bit in-bank addresses) ----
 optab:
 
@@ -1207,3 +1347,5 @@ mv_val_lo:    .space  2
 mv_val_hi:    .space  2
 jsr_tgt_lo:   .space  2       ; JSR (An) target address (item 5g)
 jsr_tgt_hi:   .space  2
+shift_cnt:    .space  2       ; register-shift count + last-bit-out (item 5h)
+shift_c:      .space  2

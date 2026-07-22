@@ -329,7 +329,7 @@ included; subtract ~21 for machine-only):
 Round total ≈ 1.08× — and the decode reorder favors LEA/JSR/RTS-dense real
 boot code beyond what the nop-heavy bench can show.
 
-## 9. Item 5: the hand-65816 core (5a–5g)
+## 9. Item 5: the hand-65816 core (5a–5h)
 
 The ladder, each rung parity- and CRC-gated:
 
@@ -342,6 +342,7 @@ The ladder, each rung parity- and CRC-gated:
 | 5e | **the branch + register-ALU set**: the *full* Bcc (all 14 conditions + BRA), ADDQ/SUBQ #d,An (no flags), and the long register-direct ALU — ADD/SUB/CMP/AND/OR.L Dn,Dn and ADDQ/SUBQ.L #d,Dn | `alu` **49 → 19** |
 | 5f | **MOVE.B/.W/.L over the RAM fast path**: src/dst in {Dn,An,(An),(An)+}, one memory operand, clean RAM only (mem→mem, ROM/IO, odd, overlay-on, wider modes all punt) | `fbfill` **265 → 86**, `ram.b` 48→14, `ram.l` 55→18, `ram.w` 49→13 |
 | 5g | **RTS / BSR.b / JSR (An)** — the call/return set; the stack read (RTS) and write (BSR/JSR push) reuse the MOVE fast path (the stack is RAM) | gates via a new `calls` phase |
+| 5h | **LSL/LSR/ROL/ROR.L Dn, #cnt** — register shifts, long, immediate count (AS/ROX/register-count/byte/word/memory punt) | `shift` **61 → 13** |
 
 The all-native `nop` phase collapsed **23 → 6 frames — ~330 CPU cycles per
 covered instruction, ~4×**. With 5e the `alu` phase (ADD/CMP/ADDQ.L, register
@@ -385,7 +386,11 @@ never called subroutines, so a `calls` phase (32× `BSR sub … RTS` + 16× `JSR
 (A0)`, D7 threaded into the CRC) gates them: a wrong return address derails the
 run and splits the host↔SNES CRC.
 
+5h takes the `shift` phase **61 → 13 (~4.7×**, near the nop phase's ceiling —
+LSL/LSR/ROL/ROR are now nearly all-native): a small count loop does the 32-bit
+shift-by-1 in two 16-bit halves and captures the last bit shifted out for C.
+
 **Where item 5 goes next** (the handler set keeps growing): the ROM-source /
 mem→mem MOVE (unlocks `copy` and the OS's ROM→RAM startup copies), byte/word
-sizes for the register ALU, CMPI, and JSR with a fetched EA (abs/disp/PC-
-relative). Beyond that: SA-1 (M7).
+sizes for the register ALU and shifts (plus AS/ROX), CMPI, and JSR with a
+fetched EA (abs/disp/PC-relative). Beyond that: SA-1 (M7).
