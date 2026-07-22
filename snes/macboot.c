@@ -50,8 +50,10 @@ static int panXb = 16, panY = 0;
 /* Mouse (the d-pad with L up): mx,my is the cursor in Mac screen coords
 ** (0..511 / 0..341); A clicks. Fed to the Mac via mac_set_mouse; the Mac then
 ** redraws its own cursor on its VBL, so it lags on the slow CPU. */
-#define MOUSE_STEP 4
-#define CLICK_HOLD 16000              /* hold a tap of A down > one VBL (12000) so it's seen */
+#define RUN_BATCH  32                 /* instructions per mac_run/input poll */
+#define MOUSE_STEP 4                  /* pixels per input poll */
+#define CLICK_HOLD 600                /* polls: 600*32 = 19200 steps > one VBL
+                                      ** (12000), so a tap of A is seen */
 static int mx = 256, my = 171, last_btn = 0;
 static uint32_t click_hold = 0;
 
@@ -152,11 +154,11 @@ int main(void){
 #endif
   refresh();                            /* first draw, screen on */
   for (;;) {
-    mac_step();
+    mac_run(RUN_BATCH);                 /* one call per batch, not per step */
     if (handle_input()) {               /* view/cursor changed: redraw now */
       refresh();
       idle = 0;
-    } else if (++idle >= BOOT_REFRESH) { /* idle: redraw for boot progress */
+    } else if ((idle += RUN_BATCH) >= BOOT_REFRESH) { /* idle: boot progress */
       idle = 0;
       refresh();
       mb_puts("t vbl="); mb_puthex32(mac_vbl_count());

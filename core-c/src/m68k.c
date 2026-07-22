@@ -366,27 +366,20 @@ static void op_group4(uint16_t op){                  /* misc */
   int mode = (op >> 3) & 7, reg = op & 7;
   uint32_t r, d;
 
-  switch (op & 0xFFF8) {
-    case 0x4E40: case 0x4E48:                        /* TRAP #n */
-      if ((op & 0xFFF0) == 0x4E40) { exception(EXC_TRAP0 + (op & 0xF), m68kc.pc); return; }
-      break;
+  /* Hot-first decode (docs/PERF.md profiler round, item 3): LEA / JSR / RTS
+  ** dominate real 68000 code; the rare TRAP/LINK/UNLK/USP checks used to be
+  ** walked first by every group-4 instruction. Reorder is safe: the hoisted
+  ** patterns are disjoint from everything that now runs after them (the
+  ** SWAP-before-PEA and EXT-before-MOVEM dependencies below are untouched). */
+  if ((op & 0xF1C0) == 0x41C0) {                     /* LEA <ea>,An */
+    int an = (op >> 9) & 7; ea_resolve(mode, reg, 4); m68kc.a[an] = ea_ad; return;
   }
-  if ((op & 0xFFF8) == 0x4E50) {                     /* LINK An,#d16 */
-    int an = op & 7; int16_t disp = (int16_t)fetch16();
-    m68kc.a[7] -= 4; M68K_WR32(m68kc.a[7], m68kc.a[an]);
-    m68kc.a[an] = m68kc.a[7]; m68kc.a[7] += (int32_t)disp; return;
-  }
-  if ((op & 0xFFF8) == 0x4E58) {                     /* UNLK An (An==A7: load overwrites the +4) */
-    int an = op & 7; uint32_t tmp;
-    m68kc.a[7] = m68kc.a[an]; tmp = M68K_RD32(m68kc.a[7]); m68kc.a[7] += 4; m68kc.a[an] = tmp; return;
-  }
-  if ((op & 0xFFF8) == 0x4E60) {                     /* MOVE An,USP */
-    if (priv_ok()) { if (m68kc.sr & SR_S) m68kc.usp = m68kc.a[op & 7]; else m68kc.a[7] = m68kc.a[op & 7]; } return;
-  }
-  if ((op & 0xFFF8) == 0x4E68) {                     /* MOVE USP,An */
-    if (priv_ok()) m68kc.a[op & 7] = (m68kc.sr & SR_S) ? m68kc.usp : m68kc.a[7]; return;
+  if ((op & 0xFFC0) == 0x4E80) {                     /* JSR */
+    ea_resolve(mode, reg, 4); m68kc.a[7] -= 4; M68K_WR32(m68kc.a[7], m68kc.pc); m68kc.pc = ea_ad; return;
   }
   switch (op) {
+    case 0x4E75:                                     /* RTS (hot: first) */
+      m68kc.pc = M68K_RD32(m68kc.a[7]); m68kc.a[7] += 4; return;
     case 0x4E71: return;                             /* NOP */
     case 0x4E70: if (priv_ok()) {} return;          /* RESET (no-op here) */
     case 0x4E73:                                     /* RTE */
@@ -394,8 +387,6 @@ static void op_group4(uint16_t op){                  /* misc */
       { uint16_t nsr = M68K_RD16(m68kc.a[7]); m68kc.a[7] += 2;
         uint32_t npc = M68K_RD32(m68kc.a[7]); m68kc.a[7] += 4;
         m68k_set_sr(nsr); m68kc.pc = npc; } return;
-    case 0x4E75:                                     /* RTS */
-      m68kc.pc = M68K_RD32(m68kc.a[7]); m68kc.a[7] += 4; return;
     case 0x4E77:                                     /* RTR */
       { uint16_t ccr = M68K_RD16(m68kc.a[7]); m68kc.a[7] += 2; set_ccr(ccr);
         m68kc.pc = M68K_RD32(m68kc.a[7]); m68kc.a[7] += 4; } return;
@@ -410,11 +401,22 @@ static void op_group4(uint16_t op){                  /* misc */
   if ((op & 0xFFC0) == 0x4EC0) {                     /* JMP */
     ea_resolve(mode, reg, 4); m68kc.pc = ea_ad; return;
   }
-  if ((op & 0xFFC0) == 0x4E80) {                     /* JSR */
-    ea_resolve(mode, reg, 4); m68kc.a[7] -= 4; M68K_WR32(m68kc.a[7], m68kc.pc); m68kc.pc = ea_ad; return;
+  /* rare system ops, checked after the hot set */
+  if ((op & 0xFFF0) == 0x4E40) { exception(EXC_TRAP0 + (op & 0xF), m68kc.pc); return; }  /* TRAP #n */
+  if ((op & 0xFFF8) == 0x4E50) {                     /* LINK An,#d16 */
+    int an = op & 7; int16_t disp = (int16_t)fetch16();
+    m68kc.a[7] -= 4; M68K_WR32(m68kc.a[7], m68kc.a[an]);
+    m68kc.a[an] = m68kc.a[7]; m68kc.a[7] += (int32_t)disp; return;
   }
-  if ((op & 0xF1C0) == 0x41C0) {                     /* LEA <ea>,An */
-    int an = (op >> 9) & 7; ea_resolve(mode, reg, 4); m68kc.a[an] = ea_ad; return;
+  if ((op & 0xFFF8) == 0x4E58) {                     /* UNLK An (An==A7: load overwrites the +4) */
+    int an = op & 7; uint32_t tmp;
+    m68kc.a[7] = m68kc.a[an]; tmp = M68K_RD32(m68kc.a[7]); m68kc.a[7] += 4; m68kc.a[an] = tmp; return;
+  }
+  if ((op & 0xFFF8) == 0x4E60) {                     /* MOVE An,USP */
+    if (priv_ok()) { if (m68kc.sr & SR_S) m68kc.usp = m68kc.a[op & 7]; else m68kc.a[7] = m68kc.a[op & 7]; } return;
+  }
+  if ((op & 0xFFF8) == 0x4E68) {                     /* MOVE USP,An */
+    if (priv_ok()) m68kc.a[op & 7] = (m68kc.sr & SR_S) ? m68kc.usp : m68kc.a[7]; return;
   }
   if ((op & 0xFFF8) == 0x4840) { int dn = op & 7;    /* SWAP (mode 0) — before PEA */
     uint32_t v = m68kc.d[dn]; v = (v >> 16) | (v << 16); m68kc.d[dn] = v; fl_logic(v, 4); return; }

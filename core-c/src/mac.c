@@ -482,3 +482,25 @@ void mac_step(void){
     via_update_irq();
   }
 }
+
+/* Batched stepping (profiler item 2): same body as mac_step in a loop, so a
+** caller pays one call per n instructions instead of one per instruction
+** (and can poll input per batch, not per step). Kept in sync with mac_step
+** above; the parity gate runs per-step and the bench runs batched, so a
+** divergence between the two would show up as a CRC/hash split. */
+void mac_run(uint16_t n){
+  do {
+#ifdef MAC_FASTBOOT
+    if (fastboot_armed && m68kc.pc == MACFB_TRIGGER_PC) fastboot_apply();
+#endif
+    m68k_step();
+    via_t1 = (uint16_t)(via_t1 - 1);
+    via_t2 = (uint16_t)(via_t2 - 1);
+    if (--vbl_timer == 0) {
+      vbl_timer = VBL_PERIOD;
+      via_ifr |= 0x02;
+      vbl_count++;
+      via_update_irq();
+    }
+  } while (--n);
+}

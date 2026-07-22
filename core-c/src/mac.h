@@ -24,6 +24,7 @@ void     mac_set_mouse(int x, int y, int btn);             /* HLE mouse: positio
 void     mac_fastboot_arm(const uint8_t *ramimg);          /* skip the RAM test (see mac.c) */
 #endif
 void     mac_step(void);                 /* one CPU instruction + machine timers */
+void     mac_run(uint16_t n);            /* n instructions, one call (see mac.c) */
 int      mac_overlay(void);
 uint32_t mac_vbl_count(void);
 uint8_t *mac_ram_ptr(void);              /* for the framebuffer / debugging */

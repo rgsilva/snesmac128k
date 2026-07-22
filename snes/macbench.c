@@ -64,7 +64,7 @@ static void video_init(void){
 }
 
 int main(void){
-  uint16_t prev = 0; uint8_t poll = 0;
+  uint16_t prev = 0;
   mb_init();
   mb_puts("macbench: our own 68000 ROM, phased workload\n");
   REG8(0x420D) = 0x01;                  /* MEMSEL: FastROM (map mode $31) */
@@ -73,9 +73,8 @@ int main(void){
   mac_set_disk(0, 409600ul);             /* dummy: arm the per-step trap guard */
   refresh();
   for (;;) {
-    mac_step();
-    if (++poll >= 16) {
-      poll = 0;
+    mac_run(16);                       /* same poll cadence, 1/16th the calls */
+    {
       uint16_t mark = (uint16_t)((mac_ram_rd(0x100u) << 8) | mac_ram_rd(0x101u));
       if (mark != prev) {
         prev = mark;
