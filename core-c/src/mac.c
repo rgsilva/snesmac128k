@@ -29,7 +29,11 @@ static const uint8_t *rom;                 /* 64 KB */
 #endif
 static int            overlay;             /* 1 at reset: ROM at $0 */
 static uint32_t       vbl_count;
-static uint32_t       instr_count;
+static uint16_t       vbl_timer;           /* down-counter to the next VBL: a
+                                           ** 16-bit compare-to-zero, where the
+                                           ** old `instr_count % VBL_PERIOD` was
+                                           ** a 32-bit runtime division EVERY
+                                           ** instruction (docs/PERF.md item B) */
 
 /* VIA 6522 (minimal): port A/B, DDRs, interrupt flag/enable, two timers */
 static uint8_t via_orb, via_ora, via_ddrb, via_ddra;
@@ -212,7 +216,9 @@ void mac_init(const uint8_t *rom_){
   via_orb = via_ora = via_ddrb = via_ddra = 0;
   via_ifr = via_ier = via_acr = via_pcr = via_sr = 0;
   via_t1 = via_t2 = 0xFFFF;
-  vbl_count = instr_count = 0;
+  vbl_count = 0;
+  vbl_timer = VBL_PERIOD;           /* first VBL after exactly VBL_PERIOD steps,
+                                    ** same phase as the old modulo */
   memset(&m68kc, 0, sizeof m68kc);
   m68kc.a[7] = m68k_read32(0);      /* overlay on => reads ROM: SP=checksum */
   m68kc.pc = m68k_read32(4);        /* PC = $0040002A */
@@ -315,10 +321,10 @@ static int sony_trap(void){
 
 void mac_step(void){
   if (!sony_trap()) m68k_step();
-  instr_count++;
   via_t1 = (uint16_t)(via_t1 - 1);   /* rough timer motion so poll loops progress */
   via_t2 = (uint16_t)(via_t2 - 1);
-  if (instr_count % VBL_PERIOD == 0) {
+  if (--vbl_timer == 0) {
+    vbl_timer = VBL_PERIOD;
     via_ifr |= 0x02;                 /* CA1 = vertical blank */
     vbl_count++;
     via_update_irq();
