@@ -152,7 +152,9 @@ static uint32_t src_read(int mode, int reg, int size){
 }
 
 /* ---- exceptions (group 1/2, 6-byte frame) ---- */
-static M68K_HOT uint32_t g_start_pc;   /* pc at the start of the current instruction */
+M68K_HOT uint32_t m68k_start_pc;       /* pc at the start of the current instruction
+                                       ** (public: the asm inner loop stamps it) */
+#define g_start_pc m68k_start_pc
 int (*m68k_aline_hook)(uint16_t op) = 0;
 static void exception(int vec, uint32_t push_pc){
   uint16_t oldsr = m68kc.sr;
@@ -608,13 +610,11 @@ static void take_interrupt(int lvl){
   m68kc.stopped = 0;
 }
 
-void m68k_step(void){
-  uint16_t op;
-  int lvl = m68kc.irq & 7;
-  if (lvl && (lvl == 7 || lvl > (int)((m68kc.sr >> 8) & 7))) { take_interrupt(lvl); return; }
-  if (m68kc.stopped) return;
-  g_start_pc = m68kc.pc;
-  op = fetch16();
+/* Decode + execute one already-fetched instruction. PC is past the opcode
+** word; g_start_pc holds its address (exceptions push it). Public so the
+** hand-asm inner loop (snes/calypsi/m68krun.s) can fetch inline and call
+** straight in (docs/PERF.md item 5). */
+void m68k_exec(uint16_t op){
   switch (op >> 12) {
     case 0x0: op_group0(op); break;
     case 0x1: op_move(op, 1); break;
@@ -677,4 +677,12 @@ void m68k_step(void){
     case 0xE: op_shift(op); break;
     case 0xF: exception(EXC_LINEF, g_start_pc); break;
   }
+}
+
+void m68k_step(void){
+  int lvl = m68kc.irq & 7;
+  if (lvl && (lvl == 7 || lvl > (int)((m68kc.sr >> 8) & 7))) { take_interrupt(lvl); return; }
+  if (m68kc.stopped) return;
+  g_start_pc = m68kc.pc;
+  m68k_exec(fetch16());
 }

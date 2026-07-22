@@ -37,17 +37,21 @@ M68K_HOT int          mac_overlay_on;      /* 1 at reset: ROM at $0. Non-static:
                                            ** paths (snes/m68kbus.h) test it. */
 #define overlay mac_overlay_on             /* local alias, minimal diff */
 static uint32_t       vbl_count;
-static M68K_HOT uint16_t vbl_timer;        /* down-counter to the next VBL: a
+M68K_HOT uint16_t mac_vbl_timer;           /* down-counter to the next VBL: a
                                            ** 16-bit compare-to-zero, where the
                                            ** old `instr_count % VBL_PERIOD` was
                                            ** a 32-bit runtime division EVERY
-                                           ** instruction (docs/PERF.md item B) */
+                                           ** instruction (docs/PERF.md item B).
+                                           ** Public + dp: the asm loop ticks it */
+#define vbl_timer mac_vbl_timer
 
 /* VIA 6522 (minimal): port A/B, DDRs, interrupt flag/enable, two timers */
 static uint8_t via_orb, via_ora, via_ddrb, via_ddra;
 static uint8_t via_ifr, via_ier;
 static uint8_t via_acr, via_pcr, via_sr;
-static M68K_HOT uint16_t via_t1, via_t2;
+M68K_HOT uint16_t mac_via_t1, mac_via_t2;  /* public + dp: the asm loop ticks them */
+#define via_t1 mac_via_t1
+#define via_t2 mac_via_t2
 
 /* VBL cadence: the real machine is 60.15 Hz (~130k CPU cycles). We don't count
 ** cycles, so approximate with an instruction count — exact rate doesn't affect
@@ -471,6 +475,15 @@ static void fastboot_apply(void){
 }
 #endif
 
+/* One VBL: reload the down-counter, raise CA1. Called by the C step paths
+** and by the asm inner loop when its dp copy of the counter hits zero. */
+void mac_vbl_fire(void){
+  vbl_timer = VBL_PERIOD;
+  via_ifr |= 0x02;                   /* CA1 = vertical blank */
+  vbl_count++;
+  via_update_irq();
+}
+
 void mac_step(void){
 #ifdef MAC_FASTBOOT
   if (fastboot_armed && m68kc.pc == MACFB_TRIGGER_PC) fastboot_apply();
@@ -478,32 +491,32 @@ void mac_step(void){
   m68k_step();
   via_t1 = (uint16_t)(via_t1 - 1);   /* rough timer motion so poll loops progress */
   via_t2 = (uint16_t)(via_t2 - 1);
-  if (--vbl_timer == 0) {
-    vbl_timer = VBL_PERIOD;
-    via_ifr |= 0x02;                 /* CA1 = vertical blank */
-    vbl_count++;
-    via_update_irq();
-  }
+  if (--vbl_timer == 0) mac_vbl_fire();
 }
 
-/* Batched stepping (profiler item 2): same body as mac_step in a loop, so a
-** caller pays one call per n instructions instead of one per instruction
-** (and can poll input per batch, not per step). Kept in sync with mac_step
-** above; the parity gate runs per-step and the bench runs batched, so a
-** divergence between the two would show up as a CRC/hash split. */
-void mac_run(uint16_t n){
-  do {
-#ifdef MAC_FASTBOOT
-    if (fastboot_armed && m68kc.pc == MACFB_TRIGGER_PC) fastboot_apply();
+/* Batched stepping (profiler item 2 + item 5c): on the SNES the inner loop
+** is hand 65816 (calypsi/m68krun.s — inline fetch-cache hit, dp state, one
+** call per instruction into m68k_exec); the host keeps the C loop. The
+** per-step parity gate runs mac_step; the batched bench runs this — a
+** divergence between the two shows up as a CRC/hash split. */
+#ifdef MAC_SNES
+void m68k_run_hot(uint16_t n);       /* calypsi/m68krun.s */
 #endif
+void mac_run(uint16_t n){
+#ifdef MAC_FASTBOOT
+  if (fastboot_armed) {              /* pre-teleport: per-step trigger check */
+    do { mac_step(); } while (--n);
+    return;
+  }
+#endif
+#ifdef MAC_SNES
+  m68k_run_hot(n);
+#else
+  do {
     m68k_step();
     via_t1 = (uint16_t)(via_t1 - 1);
     via_t2 = (uint16_t)(via_t2 - 1);
-    if (--vbl_timer == 0) {
-      vbl_timer = VBL_PERIOD;
-      via_ifr |= 0x02;
-      vbl_count++;
-      via_update_irq();
-    }
+    if (--vbl_timer == 0) mac_vbl_fire();
   } while (--n);
+#endif
 }

@@ -61,6 +61,8 @@ extern void     m68k_write32(uint32_t addr, uint32_t v);
 
 void m68k_set_sr(uint16_t val);  /* write SR with correct A7 bank swap */
 void m68k_step(void);            /* execute one instruction / take a pending trap */
+void m68k_exec(uint16_t op);     /* decode+execute a fetched op (see m68k.c) */
+extern M68K_HOT uint32_t m68k_start_pc;  /* opcode address of the current op */
 
 /* Optional A-line (0xAxxx opcode) intercept, called AFTER the opcode fetch
 ** (PC is already past the trap word). Return nonzero if handled; zero falls

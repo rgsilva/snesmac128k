@@ -58,7 +58,10 @@
             (address (#xc00000 . #xc0ffff))
             (type ROM)
             (qualifier far)
-            (section farcode cdata cnear cfar chuge switch ifar ihuge
+            ;; asmhot: the hand-asm interpreter loop + its jmp (abs,X) jump
+            ;; table — MUST stay in one bank (the table holds 16-bit in-bank
+            ;; addresses); this memory is exactly one bank, so it does.
+            (section asmhot farcode cdata cnear cfar chuge switch ifar ihuge
                      (LoROM-store #xc08000)
                      (HeaderExt-store #xc0ffb0)
                      (Header-store #xc0ffc0)
