@@ -9,9 +9,6 @@ driver so it can read a System disk straight out of the cartridge. It boots Syst
 to the **Finder desktop**. It ships as a single `.sfc` — no special cartridge chip,
 no expansion hardware, just a Super Nintendo (and a lot of patience).
 
-<!-- Screenshots live in docs/assets/, which is gitignored: they show Apple's
-     boot screens / UI and are not shipped in the repo. Build with your own
-     ROM + disk and they're a Mesen screenshot away. -->
 <p align="center">
   <img src="docs/assets/macboot_003.png" width="420" alt="The Apple menu, opened with a SNES controller"><br>
   <sub>The 🍎 menu, opened on a Super Nintendo — the d-pad moves the mouse, A clicks.</sub>

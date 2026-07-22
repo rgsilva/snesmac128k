@@ -26,7 +26,3 @@ __pycache__/
 .DS_Store
 core-c/tests/parity_ref.h
 roms/
-
-# Boot screenshots (docs/assets/) — Apple boot screens / UI, never shipped;
-# the docs reference them and they render locally when you drop your own in.
-docs/assets/
