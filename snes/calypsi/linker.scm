@@ -8,18 +8,20 @@
             (address (#x0 . #xff))
             (type RAM)
             (section registers ztiny tiny))
-    ;; nearly all of bank-0 RAM is C stack: mp_init alone needs ~6KB
-    ;; (measured; Calypsi frames save 32-bit pseudo registers)
+    ;; bank-0 RAM is C stack + near data. The whole runtime must fit under
+    ;; $2000: WRAM $7E2000-$7FFFFF is the Mac's RAM $2000-$1FFFF (linear;
+    ;; the low 8 KB of Mac RAM lives in one fixed cart-SRAM window), see
+    ;; snes/macmem.h. Stack was $1D00 (sized for MicroPython's mp_init);
+    ;; the mac programs are shallow.
     (memory LoRAM
-            (address (#x100 . #x1fff))
+            (address (#x100 . #x1bff))
             (type RAM)
             (qualifier near)
             (section stack data znear near))
-    ;; far data stays in bank $7E; all of bank $7F is the MicroPython GC heap
-    ;; (fixed addresses in port/main.c, no linker object — far objects must
-    ;; not cross the bank boundary)
+    ;; far data crammed under the Mac-RAM floor too (same physical WRAM,
+    ;; far-qualified so 24-bit addressing works on it)
     (memory HiRAM
-            (address (#x7e2000 . #x7e7fff)) ; $7E:8000+ = M7 buffer/heap/mailbox (fixed addrs)
+            (address (#x7e1c00 . #x7e1fff))
             (type RAM)
             (qualifier far)
             (section heap zfar far huge))
@@ -68,7 +70,7 @@
             (qualifier far)
             (section farcode cdata cnear cfar chuge switch ifar ihuge))
 
-    (block stack (size #x1d00))
+    (block stack (size #x1a00))
     (base-address _DirectPageStart DirectPage 0)
     (base-address _NearBaseAddress LoRAM 0)
     ))

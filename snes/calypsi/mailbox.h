@@ -23,21 +23,28 @@
 #define MB_STATUS_PASS 1u
 #define MB_STATUS_PANIC 0xDEADu
 
-/* snespico8: bank $7F is the PICO-8 machine RAM, so the mailbox lives
-   at the top of $7E ($7E:F000-$7E:FFFF). $7E:F00A/F00C carry flip and
-   VM-op telemetry for the M3 harness. */
+/* Mailbox base. Plain builds: top of WRAM bank $7E ($7E:F000-$7E:FFFF).
+   Mac builds (-DMAC_SNES): WRAM $7E2000-$7FFFFF IS the Mac's RAM (PERF.md
+   item H), so the mailbox moves to cart-SRAM window 18 — bank $B2:6000
+   (fast mirror), SRAM byte offset $24000, above the Mac's 16 windows. The
+   Lua side reads it as snesSaveRam at 0x24000. Same internal layout. */
+#ifdef MAC_SNES
+#  define MB_BASE 0xB26000ul
+#else
+#  define MB_BASE 0x7EF000ul
+#endif
 #define MB_RING_SIZE 3552u
 #define MB_IN_RING_SIZE 512u
 
-#define MB_MAGIC (*(volatile __far uint16_t *)0x7EF000)
-#define MB_STATUS (*(volatile __far uint16_t *)0x7EF002)
-#define MB_WINDEX (*(volatile __far uint16_t *)0x7EF004)
-#define MB_IN_WINDEX (*(volatile __far uint16_t *)0x7EF006)
-#define MB_IN_RINDEX (*(volatile __far uint16_t *)0x7EF008)
-#define MB_FLIPS (*(volatile __far uint16_t *)0x7EF00A)
-#define MB_VMOPS (*(volatile __far uint32_t *)0x7EF00C)
-#define MB_RING ((volatile __far uint8_t *)0x7EF010)
-#define MB_IN_RING ((volatile __far uint8_t *)0x7EFE00)
+#define MB_MAGIC (*(volatile __far uint16_t *)(MB_BASE + 0x000))
+#define MB_STATUS (*(volatile __far uint16_t *)(MB_BASE + 0x002))
+#define MB_WINDEX (*(volatile __far uint16_t *)(MB_BASE + 0x004))
+#define MB_IN_WINDEX (*(volatile __far uint16_t *)(MB_BASE + 0x006))
+#define MB_IN_RINDEX (*(volatile __far uint16_t *)(MB_BASE + 0x008))
+#define MB_FLIPS (*(volatile __far uint16_t *)(MB_BASE + 0x00A))
+#define MB_VMOPS (*(volatile __far uint32_t *)(MB_BASE + 0x00C))
+#define MB_RING ((volatile __far uint8_t *)(MB_BASE + 0x010))
+#define MB_IN_RING ((volatile __far uint8_t *)(MB_BASE + 0xE00))
 
 void mb_init(void);
 void mb_putc(char c);

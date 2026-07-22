@@ -14,34 +14,42 @@
 #include "calypsi/mailbox.h"
 #include "mac.h"
 
-uint8_t mac_ram_rd(uint32_t a);          /* macmem.c (declare: 16-bit-int ABI!) */
+#include "macmem.h"               /* inline accessors (mac_ram_rd) */
 
 #define REG8(a)  (*(volatile uint8_t  *)(unsigned long)(a))
 #define REG16(a) (*(volatile uint16_t *)(unsigned long)(a))
 
-#define TILEBUF   ((volatile __far uint8_t *)0x7E8000ul)
 #define TW 32
 #define TH 28
 #define TILEBYTES (TW * TH * 16)
-#define FB_SRAM(a) (0xA06000ul + ((a) >> 13) * 0x10000ul + ((a) & 0x1FFFul))
+/* tile buffer in cart SRAM windows 16+17; framebuffer read linear from WRAM
+** (item H — see macboot.c for the layout notes) */
+#define TB0       ((volatile __far uint8_t *)0xB06000ul)
+#define TB1       ((volatile __far uint8_t *)0xB16000ul)
+#define MAC_FB(a) ((const volatile __far uint8_t *)(0x7E0000ul + (a)))
 
 static void blit_tiles(void){
   REG8(0x2115) = 0x80; REG16(0x2116) = 0x1000;
   REG8(0x4300) = 0x01; REG8(0x4301) = 0x18;
-  REG8(0x4302) = 0x00; REG8(0x4303) = 0x80; REG8(0x4304) = 0x7E;
-  REG16(0x4305) = (uint16_t)TILEBYTES;
+  REG8(0x4302) = 0x00; REG8(0x4303) = 0x60; REG8(0x4304) = 0xB0;
+  REG16(0x4305) = 8192u;
+  REG8(0x420B) = 0x01;
+  REG16(0x2116) = 0x2000;
+  REG8(0x4302) = 0x00; REG8(0x4303) = 0x60; REG8(0x4304) = 0xB1;
+  REG16(0x4305) = (uint16_t)(TILEBYTES - 8192u);
   REG8(0x420B) = 0x01;
 }
 
 static void refresh(void){               /* fixed centre crop, as macboot */
   uint16_t tx, ty; uint8_t r;
   for (ty = 0; ty < TH; ty++) {
-    uint16_t trow = (uint16_t)(ty * TW);
+    volatile __far uint8_t *tb = (ty < 16) ? TB0 : TB1;
+    uint16_t tbase = (uint16_t)(((ty < 16) ? ty : ty - 16) * TW * 16);
     for (r = 0; r < 8; r++) {
-      uint32_t addr = 0x1A700ul + (uint32_t)(ty * 8 + r) * 64u + 16u;
-      const volatile __far uint8_t *sp = (const volatile __far uint8_t *)FB_SRAM(addr);
+      const volatile __far uint8_t *sp =
+        MAC_FB(0x1A700ul + (uint32_t)(ty * 8 + r) * 64u + 16u);
       for (tx = 0; tx < TW; tx++)
-        TILEBUF[(uint16_t)((trow + tx) * 16 + r * 2)] = sp[tx];
+        tb[(uint16_t)(tbase + tx * 16 + r * 2)] = sp[tx];
     }
   }
   REG8(0x2100) = 0x8F; blit_tiles(); REG8(0x2100) = 0x0F;
@@ -58,7 +66,8 @@ static void video_init(void){
   REG8(0x210D) = 0; REG8(0x210D) = 0;
   REG8(0x210E) = 0; REG8(0x210E) = 0;
   REG8(0x212C) = 0x01;
-  for (i = 0; i < TILEBYTES; i++) TILEBUF[i] = 0;
+  for (i = 0; i < 8192u; i++) TB0[i] = 0;
+  for (i = 0; i < TILEBYTES - 8192u; i++) TB1[i] = 0;
 }
 
 int main(void){

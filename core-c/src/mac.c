@@ -256,13 +256,13 @@ uint16_t m68k_fetch16(uint32_t pc){
     uint32_t a = pc & 0xFFFFFFul;
     if (a < 0x400000ul) {
       if (!overlay)
-        fetch_base = (const volatile __far uint8_t *)MAC_SRAM(a & 0x1E000ul);
+        fetch_base = mac_ram_ptr8(a & 0x1E000ul);
       else
         fetch_base = (const volatile __far uint8_t *)(0xC80000ul + (a & 0xE000ul));
     } else if (a < 0x500000ul) {
       fetch_base = (const volatile __far uint8_t *)(0xC80000ul + (a & 0xE000ul));
     } else if (a >= 0x600000ul && a < 0x800000ul && overlay) {
-      fetch_base = (const volatile __far uint8_t *)MAC_SRAM(a & 0x1E000ul);
+      fetch_base = mac_ram_ptr8(a & 0x1E000ul);
     } else {
       return m68k_read16(pc);                     /* PC in I/O space: don't cache */
     }

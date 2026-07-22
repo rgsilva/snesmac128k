@@ -1,17 +1,18 @@
 -- M4b parity harness: run the live Mac machine model on the SNES and drain the
 -- WRAM mailbox ($7EF000). Same protocol as parity.lua, but a much longer frame
 -- budget: booting the ROM for MACP_N steps at -O0 takes many emulated frames.
-local MB_MAGIC, MB_STATUS, MB_WINDEX, MB_RING = 0xF000, 0xF002, 0xF004, 0xF010
+-- the mac builds keep the mailbox in cart SRAM (WRAM belongs to the Mac)
+local MB_MAGIC, MB_STATUS, MB_WINDEX, MB_RING = 0x24000, 0x24002, 0x24004, 0x24010
 local RING_SIZE = 3552
 
 local frames, sawMagic, readIndex, line = 0, false, 0, ""
 
-local function word(addr) return emu.readWord(addr, emu.memType.snesWorkRam, false) end
+local function word(addr) return emu.readWord(addr, emu.memType.snesSaveRam, false) end
 
 local function drain()
   local wi = word(MB_WINDEX)
   while readIndex ~= wi do
-    local b = emu.read(MB_RING + (readIndex % RING_SIZE), emu.memType.snesWorkRam)
+    local b = emu.read(MB_RING + (readIndex % RING_SIZE), emu.memType.snesSaveRam)
     if b == 10 then print("OUT " .. line); line = "" else line = line .. string.char(b) end
     readIndex = (readIndex + 1) % 65536
   end

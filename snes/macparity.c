@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include "calypsi/mailbox.h"
 #include "mac.h"
+#include "macmem.h"
 #include "macparity_hash.h"
 #include "macparity_ref.h"      /* MACP_N, MACP_CPUHASH, MACP_RAMHASH (host) */
 

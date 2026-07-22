@@ -97,13 +97,12 @@ MACP_N ?= 500
 
 $(BUILD)/macheader.o: calypsi/macheader.s | $(BUILD)
 	$(AS) -o $@ $< $(AFLAGS)
+$(BUILD)/macmailbox.o: calypsi/mailbox.c calypsi/mailbox.h | $(BUILD)
+	$(CC) -o $@ calypsi/mailbox.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
 $(BUILD)/macm68k.o: ../core-c/src/m68k.c ../core-c/src/m68k.h | $(BUILD)
 	$(CC) -o $@ ../core-c/src/m68k.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
-$(BUILD)/mac.o: ../core-c/src/mac.c ../core-c/src/mac.h ../core-c/src/m68k.h | $(BUILD)
+$(BUILD)/mac.o: ../core-c/src/mac.c ../core-c/src/mac.h ../core-c/src/m68k.h macmem.h | $(BUILD)
 	$(CC) -o $@ ../core-c/src/mac.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
-$(BUILD)/macmem.o: macmem.c | $(BUILD)
-	$(CC) -o $@ macmem.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
-
 # host reference: boot N steps, emit the CPU/RAM hashes the SNES must match
 $(BUILD)/macgenref: ../core-c/tests/macgenref.c ../core-c/src/mac.c ../core-c/src/m68k.c ../core-c/tests/macparity_hash.h | $(BUILD)
 	cc -O2 -std=c11 -I../core-c/src -I../core-c/tests -o $@ ../core-c/tests/macgenref.c ../core-c/src/mac.c ../core-c/src/m68k.c
@@ -112,7 +111,7 @@ $(BUILD)/macparity_ref.h: $(BUILD)/macgenref ../roms/mac128k.rom
 
 $(BUILD)/macparity.o: macparity.c $(BUILD)/macparity_ref.h ../core-c/tests/macparity_hash.h calypsi/mailbox.h | $(BUILD)
 	$(CC) -o $@ macparity.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
-$(BUILD)/macparity.raw: $(BUILD)/macheader.o $(BUILD)/mailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macmem.o $(BUILD)/macparity.o
+$(BUILD)/macparity.raw: $(BUILD)/macheader.o $(BUILD)/macmailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macparity.o
 	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macparity.map $^
 $(BUILD)/macparity.sfc: $(BUILD)/macparity.raw tools/raw2sfc.py ../roms/mac128k.rom
 	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom
@@ -132,7 +131,7 @@ $(BUILD)/benchhost: ../core-c/tests/benchhost.c ../core-c/src/mac.c ../core-c/sr
 	cc -O2 -std=c11 -I../core-c/src -o $@ ../core-c/tests/benchhost.c ../core-c/src/mac.c ../core-c/src/m68k.c
 $(BUILD)/macbench.o: macbench.c calypsi/mailbox.h ../core-c/src/mac.h | $(BUILD)
 	$(CC) -o $@ macbench.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
-$(BUILD)/macbench.raw: $(BUILD)/macheader.o $(BUILD)/mailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macmem.o $(BUILD)/macbench.o
+$(BUILD)/macbench.raw: $(BUILD)/macheader.o $(BUILD)/macmailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macbench.o
 	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macbench.map $^
 $(BUILD)/macbench.sfc: $(BUILD)/macbench.raw tools/raw2sfc.py $(BUILD)/benchrom.bin
 	python3 tools/raw2sfc.py $< $@ --at 0x080000 $(BUILD)/benchrom.bin
@@ -152,7 +151,7 @@ test-bench: $(BUILD)/macbench.sfc $(BUILD)/benchhost
 # ---- the live boot: run the machine + draw the framebuffer, disk embedded ----
 $(BUILD)/macboot.o: macboot.c calypsi/mailbox.h ../core-c/src/mac.h | $(BUILD)
 	$(CC) -o $@ macboot.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
-$(BUILD)/macboot.raw: $(BUILD)/macheader.o $(BUILD)/mailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macmem.o $(BUILD)/macboot.o
+$(BUILD)/macboot.raw: $(BUILD)/macheader.o $(BUILD)/macmailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macboot.o
 	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macboot.map $^
 $(BUILD)/macboot.sfc: $(BUILD)/macboot.raw tools/raw2sfc.py ../roms/mac128k.rom ../roms/sys11_data.bin
 	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom --at 0x100000 ../roms/sys11_data.bin

@@ -9,9 +9,9 @@ local frames, readIndex, line, shots = 0, 0, "", 0
 local SHOT_EVERY = 1800          -- ~30 s of emulated time
 
 local function drain()
-  local wi = emu.readWord(MB_WINDEX, emu.memType.snesWorkRam, false)
+  local wi = emu.readWord(MB_WINDEX, emu.memType.snesSaveRam, false)
   while readIndex ~= wi do
-    local b = emu.read(MB_RING + (readIndex % RING_SIZE), emu.memType.snesWorkRam)
+    local b = emu.read(MB_RING + (readIndex % RING_SIZE), emu.memType.snesSaveRam)
     if b == 10 then print("OUT " .. line); line = "" else line = line .. string.char(b) end
     readIndex = (readIndex + 1) % 65536
   end

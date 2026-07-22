@@ -22,16 +22,20 @@
 #define REG16(a) (*(volatile uint16_t *)(unsigned long)(a))
 
 #define DISK_SIZE     409600ul                        /* 400K floppy at $D00000 */
-#define TILEBUF       ((volatile __far uint8_t *)0x7E8000ul)  /* 32x28 tiles, 14 KB */
 #define TW 32
 #define TH 28
 #define TILEBYTES     (TW * TH * 16)                  /* 14336 */
 #define PANY_STEP     4                               /* vertical pan, pixels/poll */
 #define BOOT_REFRESH  4096u                           /* idle redraw cadence (boot progress) */
 
-/* framebuffer byte -> cart-SRAM address (8 KB windows at banks $20-$2F:6000),
-** same mapping as macmem.c but used here once per fb row, not per byte. */
-#define FB_SRAM(a)    (0xA06000ul + ((a) >> 13) * 0x10000ul + ((a) & 0x1FFFul))
+/* The tile buffer lives in cart SRAM windows 16+17 (banks $B0/$B1:6000, fast
+** mirrors, above the Mac's 16 windows) — WRAM $7E2000+ belongs to the Mac now
+** (PERF.md item H). Rows 0-15 (tiles 0-511 = 8192 bytes) fill window 16
+** exactly; rows 16-27 (6144 bytes) go in window 17 — a tile row never
+** straddles. The framebuffer itself is read straight out of WRAM, linear. */
+#define TB0           ((volatile __far uint8_t *)0xB06000ul)
+#define TB1           ((volatile __far uint8_t *)0xB16000ul)
+#define MAC_FB(a)     ((const volatile __far uint8_t *)(0x7E0000ul + (a)))
 
 /* The visible window into the Mac screen. panXb is the left edge in framebuffer
 ** BYTES (x8 = pixels), 0..32; panY is the top edge in pixel rows, 0..118 — the
@@ -46,14 +50,18 @@ static int panXb = 16, panY = 0;
 static int mx = 256, my = 171, last_btn = 0;
 static uint32_t click_hold = 0;
 
-/* DMA the WRAM tile buffer to VRAM word $1000 (A-bus WRAM -> B-bus $2118/$2119). */
+/* DMA the two SRAM tile-buffer windows to VRAM word $1000 (A-bus -> $2118/9). */
 static void blit_tiles(void){
   REG8(0x2115) = 0x80;                  /* VMAIN: word, +1 after $2119 */
   REG16(0x2116) = 0x1000;               /* VRAM word address */
   REG8(0x4300) = 0x01;                  /* A->B, 2 regs */
   REG8(0x4301) = 0x18;                  /* B-bus $2118 */
-  REG8(0x4302) = 0x00; REG8(0x4303) = 0x80; REG8(0x4304) = 0x7E;  /* src $7E8000 */
-  REG16(0x4305) = (uint16_t)TILEBYTES;
+  REG8(0x4302) = 0x00; REG8(0x4303) = 0x60; REG8(0x4304) = 0xB0;  /* src $B06000 */
+  REG16(0x4305) = 8192u;
+  REG8(0x420B) = 0x01;
+  REG16(0x2116) = 0x2000;               /* continue at word $1000 + 4096 */
+  REG8(0x4302) = 0x00; REG8(0x4303) = 0x60; REG8(0x4304) = 0xB1;  /* src $B16000 */
+  REG16(0x4305) = (uint16_t)(TILEBYTES - 8192u);
   REG8(0x420B) = 0x01;
 }
 
@@ -63,19 +71,16 @@ static void blit_tiles(void){
 ** blinks for a few ms, not for the whole (slow) tile rebuild. */
 static void refresh(void){
   uint16_t tx, ty; uint8_t r;
-  /* The framebuffer's 64-byte rows align to the 8 KB SRAM windows (the fb starts
-  ** 28 rows into a window and 8192/64 = 128 rows fill one), so a row never
-  ** straddles a window. So compute the far pointer ONCE per fb row (the costly
-  ** 32-bit window math) and read the 32 window bytes with plain 16-bit indexing
-  ** — ~7000 per-byte address computations become ~224 per-row ones. */
   for (ty = 0; ty < TH; ty++) {
-    uint16_t trow = (uint16_t)(ty * TW);
+    /* rows 0-15 -> window 16, rows 16-27 -> window 17 (see TB0/TB1 above) */
+    volatile __far uint8_t *tb = (ty < 16) ? TB0 : TB1;
+    uint16_t tbase = (uint16_t)(((ty < 16) ? ty : ty - 16) * TW * 16);
     for (r = 0; r < 8; r++) {
       uint16_t fbrow = (uint16_t)(panY + ty * 8 + r);
-      uint32_t addr = 0x1A700ul + (uint32_t)fbrow * 64u + (uint32_t)panXb;
-      const volatile __far uint8_t *sp = (const volatile __far uint8_t *)FB_SRAM(addr);
+      const volatile __far uint8_t *sp =
+        MAC_FB(0x1A700ul + (uint32_t)fbrow * 64u + (uint32_t)panXb);
       for (tx = 0; tx < TW; tx++)
-        TILEBUF[(uint16_t)((trow + tx) * 16 + r * 2)] = sp[tx];
+        tb[(uint16_t)(tbase + tx * 16 + r * 2)] = sp[tx];
     }
   }
   REG8(0x2100) = 0x8F;                  /* blank just for the VRAM DMA */
@@ -132,7 +137,8 @@ static void video_init(void){
   REG8(0x210D) = 0; REG8(0x210D) = 0;
   REG8(0x210E) = 0; REG8(0x210E) = 0;
   REG8(0x212C) = 0x01;                  /* main screen: BG1 */
-  for (i = 0; i < TILEBYTES; i++) TILEBUF[i] = 0;       /* plane1 stays 0 forever */
+  for (i = 0; i < 8192u; i++) TB0[i] = 0;               /* plane1 stays 0 forever */
+  for (i = 0; i < TILEBYTES - 8192u; i++) TB1[i] = 0;
 }
 
 int main(void){
