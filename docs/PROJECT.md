@@ -103,11 +103,16 @@ Three facts make it feasible, and all three are load-bearing:
   HLE) and an on-screen keyboard (SELECT; keyDown injected via the ROM's own
   `_PostEvent`). Plus the display UX: pan (L), zoom-out (R), and an optional
   external drive (a second disk image). See [COMPATIBILITY.md](COMPATIBILITY.md).
-- **M7 — Perf + SA-1 + release.** *Perf largely done* (see [PERF.md](PERF.md)):
-  ~6× faster to the desktop via fetch-once, FastROM, a two-region memory model, a
-  hand-65816 inner loop + native handlers, and a fastboot teleport past the RAM
-  test — all scored by a committable Apple-free benchmark ROM. *Still open:* the
-  SA-1 coprocessor (linear RAM + ~3× clock) and a BYO-ROM public build.
+- **M7 — Perf + SA-1 + release.** *Perf: the interpreter's hot path is now
+  largely native* (see [PERF.md](PERF.md)). On top of fetch-once, FastROM, the
+  two-region memory model, and the fastboot teleport past the RAM test, the
+  hand-65816 inner loop grew from a NOP/MOVEQ/branch skeleton to native handlers
+  for the boot's whole hot mix — MOVE.B/.W/.L, the register ALU, ADDQ/SUBQ, all
+  14 Bcc plus BSR/JSR/RTS, shifts, CMPI, and BTST (the biggest boot op, confirmed
+  by histogramming the ROM) — each parity- and CRC-gated by the Apple-free bench
+  ROM (which grew `branch`/`calls`/`cmpi`/`btst` phases for paths the boot can't
+  cover). *Still open:* MUL/DIV and the mem→mem / immediate-ALU tail, the SA-1
+  coprocessor (linear RAM + ~3× clock), and a BYO-ROM public build.
 
 ## M1 — validation result
 

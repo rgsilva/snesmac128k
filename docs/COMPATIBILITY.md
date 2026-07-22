@@ -69,12 +69,17 @@ All captured from snesmac running in Mesen — every frame is the SNES's own PPU
 
 snesmac is **slow, but no longer comically slow**. The interpreted 68000 started at
 ~200 instructions/second (a cold boot to the desktop was ~4–5 hours); after the
-measured optimization campaign in [PERF.md](PERF.md) it runs at **~1,200
-instructions/second**, and the default build also **teleports past the ROM's RAM
-test and boot-chime delays** (1.5 M instructions the ROM burns before its first
-disk read — regenerated from your own ROM at build time, bit-equivalent resume,
-`FASTBOOT=0` for the purist boot). Net effect: the Happy Mac appears in moments,
-and the desktop is **tens of minutes away in real time — minutes under
+measured optimization campaign in [PERF.md](PERF.md) — fetch-once, FastROM, the
+two-region memory model, and a hand-65816 inner loop — it reached **~1,200
+instructions/second**. Since then that inner loop has grown **native handlers for
+the boot's whole hot instruction mix** (MOVE, the register ALU, ADDQ/SUBQ, all 14
+Bcc plus BSR/JSR/RTS, shifts, CMPI, and BTST — the single biggest boot op),
+pushing the individual hot instructions several times cheaper still; the bench
+phases they target run 2–4.7× faster. The default build also **teleports past the
+ROM's RAM test and boot-chime delays** (1.5 M instructions the ROM burns before
+its first disk read — regenerated from your own ROM at build time, bit-equivalent
+resume, `FASTBOOT=0` for the purist boot). Net effect: the Happy Mac appears in
+moments, and the desktop is **tens of minutes away in real time — minutes under
 fast-forward** instead of an afternoon.
 
 Why it can't just be fast, structurally:
@@ -91,9 +96,10 @@ Why it can't just be fast, structurally:
   the campaign killed as many "obvious" ideas as it confirmed, and one compiler
   flag that miscompiled the machine.
 
-What remains before it's *comfortable*: hand-65816 for the fetch/decode/dispatch
-skeleton, and the **SA-1** coprocessor (~10.7 MHz + linear RAM) as milestone M7 —
-see [FUTURE.md](FUTURE.md).
+What remains before it's *comfortable*: **MUL/DIV** and the mem→mem / immediate-ALU
+instruction tail (the fetch/decode/dispatch skeleton and the boot's hot ops are
+already native), and the **SA-1** coprocessor (~10.7 MHz + linear RAM) as
+milestone M7 — see [FUTURE.md](FUTURE.md).
 
 ## Getting a disk
 

@@ -6,30 +6,32 @@ you **can't touch it** yet. Roughly in priority order:
 
 ## Make it watchable (performance)
 
-The interpreted 68000 runs at ~200 instructions/sec, so a boot is hours (see
-[COMPATIBILITY.md](COMPATIBILITY.md)). **The plan of record is [PERF.md](PERF.md)** —
-a measured cost breakdown (the opcode is fetched twice per instruction, a 32-bit
-modulo runs per step, the ROM is mapped SlowROM…), a ranked fix list, and a
-committable Apple-free 68000 bench ROM that gives every change a hard
-cycles-per-instruction number. The levers, smallest to biggest:
+**The plan of record is [PERF.md](PERF.md)** — a measured cost breakdown, a
+ranked fix list, and a committable Apple-free 68000 bench ROM that gives every
+change a hard cycles-per-instruction number. Most of that ranked list is now
+**done**; what's left is the arithmetic tail and the big coprocessor lever:
 
-- **Rewrite the hot path in assembly.** The fetch/decode/dispatch inner loop and the
-  memory accessors are the cost centre; Calypsi's `-O2` C is fine but not tight. Hand
-  65816 (threaded dispatch, the register file in the direct page — the snes86 playbook)
-  should be worth ~2–4×.
-- **Cut the memory-window tax.** The Mac's RAM lives in 8 KB SRAM windows, so every
-  access does bank math. Put the *hot* RAM — the stack, the low globals, the
-  framebuffer — in flat WRAM instead, precompute per-window base pointers, or use a
-  faster window map. (Each access is only ~13 instructions today, but there are ~10 per
-  emulated instruction, so it adds up.)
-- **Precompute the slow arithmetic.** The 68000's `MUL`/`DIV` and some address math run
-  as software routines on the 16-bit 65816; lookup tables and strength-reduction can
-  help.
-- **SA-1.** The biggest single lever, and the reason a Mac-on-SNES can be watchable at
-  all: the SA-1 is a 65816 *in the cartridge* at 10.7 MHz (3× the console CPU) with flat,
-  linear RAM — which also erases the window tax. On its own that's ~5×; stacked with the
-  assembly and memory work, "tens of minutes" is realistic. This is milestone **M7**,
-  alongside a bring-your-own-ROM public release.
+- **Hot path in assembly — done.** The fetch/decode/dispatch inner loop is hand
+  65816 (`snes/calypsi/m68krun.s`) with the register file in the direct page, and
+  it grew from a NOP/MOVEQ/branch skeleton to native handlers for the boot's
+  whole hot instruction mix: MOVE.B/.W/.L, the register ALU (ADD/SUB/CMP/AND/OR),
+  ADDQ/SUBQ, all 14 Bcc plus BSR/JSR/RTS, LSL/LSR/ROL/ROR, CMPI, and BTST (the
+  single biggest boot op — ~78k of the first 200k instructions). Anything
+  unhandled punts to the C decoder; the bench phases the handlers target run
+  **2–4.7× faster** (`nop` and `shift` are within a hair of all-native).
+- **Memory-window tax — done.** RAM is two flat regions (WRAM-linear above
+  `$2000`, the fast bank-`$20` SRAM mirror below), so there's no per-access window
+  math left, and the stack/MOVE/BTST handlers reuse that one fast path.
+- **Precompute the slow arithmetic — open.** `MUL`/`DIV` still run as C software
+  routines on the 16-bit 65816 (the `muldiv` bench phase is the last
+  un-accelerated one); the SNES's hardware multiplier could be wired in.
+- **The instruction tail — open.** mem→mem / ROM-source MOVE (the OS's ROM→RAM
+  startup copies, the `copy` phase), the immediate ALU (ORI/ANDI/SUBI/ADDI/EORI),
+  BCHG/BCLR/BSET, and JSR with a fetched EA still punt — each rarer in the boot.
+- **SA-1.** The biggest single remaining lever: a 65816 *in the cartridge* at
+  10.7 MHz (3× the console CPU) with flat, linear RAM. On its own ~5×, stacked on
+  the assembly work already in place. This is milestone **M7**, alongside a
+  bring-your-own-ROM public release.
 
 ## Make it usable (input) — milestone **M6**
 

@@ -69,9 +69,11 @@ Load `snes/build/macboot.sfc` in an accurate emulator such as
 
 **It is slow — but honestly slow.** The 68000 is interpreted in software on a
 3.58 MHz 16-bit CPU. The default build teleports past the ROM's RAM test (the
-Happy Mac shows up in moments) and the measured optimization campaign has it
-~6× faster than the first boots; the desktop is still tens of minutes away in
-real time — minutes with fast-forward. See
+Happy Mac shows up in moments), and a measured optimization campaign moved the
+interpreter's hot path into hand-65816 assembly — native handlers now cover the
+boot's whole hot instruction mix (MOVE, the register ALU, branches, calls,
+shifts, CMPI, BTST). The desktop is still tens of minutes away in real time —
+minutes with fast-forward. See
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the honest numbers,
 [docs/PERF.md](docs/PERF.md) for the campaign, and
 [docs/FUTURE.md](docs/FUTURE.md) for where it goes next.

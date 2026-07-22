@@ -181,14 +181,15 @@ turned out to compile to the identical runtime call. Measure, land, repeat.
 
 `make -C snes test-bench` (fresh Mesen). Total = frames from phase 1 to done;
 columns are frames per phase (fewer = faster). The host and SNES CRC must match
-every row (`482acf71` since the `branch` phase was added — case-insensitively:
-the SNES prints lowercase hex, the host upper).
+every row — that's the semantic gate (case-insensitively: the SNES prints
+lowercase hex, the host upper). The exact value moves as gate phases are added
+(`branch`, `calls`, `cmpi`, `btst` were added with 5e–5j to exercise paths the
+real boot can't); it is currently `d676e6a9` over a ~15,700-instruction benchrom.
 
-"Total" = frames for phases 1–10 (the `trap` phase, added with change A, and the
-`branch` phase, added with 5e, are listed/counted separately since earlier rows
-predate them). The rows below predate the ~15,030-instruction `branch`-phase
-benchrom, so their absolute totals aren't comparable to a fresh run — the
-per-phase columns are.
+"Total" = frames for phases 1–10; the phases added with later changes (`trap`
+with change A, then `branch`/`calls`/`cmpi`/`btst`) are listed/counted separately
+since earlier rows predate them, so the rows below aren't comparable to a fresh
+run on absolute total — the per-phase columns are.
 
 | change | total | nop | alu | ram.b | ram.w | ram.l | shift | muldiv | copy | fbfill | trap | ≈instr/s |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
