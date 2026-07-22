@@ -14,9 +14,9 @@
 #define M68KBUS_H
 #include "macmem.h"
 
-extern int mac_overlay_on;
-extern uint32_t mac_fetch_tag;
-extern const volatile __far uint8_t *mac_fetch_base;
+extern M68K_HOT int mac_overlay_on;
+extern M68K_HOT uint32_t mac_fetch_tag;
+extern M68K_HOT uint32_t mac_fetch_base;   /* raw SNES address of the block */
 
 static inline uint8_t m68k_bus_rd8(uint32_t a){
   a &= 0xFFFFFFul;
@@ -65,7 +65,8 @@ static inline void m68k_bus_wr32(uint32_t a, uint32_t v){
 static inline uint16_t m68k_bus_fetch16(uint32_t pc){
   if ((pc & 0xFFFFE000ul) == mac_fetch_tag) {
     uint16_t off = (uint16_t)(pc & 0x1FFFu);
-    return (uint16_t)(((uint16_t)mac_fetch_base[off] << 8) | mac_fetch_base[off + 1]);
+    const volatile __far uint8_t *p = (const volatile __far uint8_t *)mac_fetch_base;
+    return (uint16_t)(((uint16_t)p[off] << 8) | p[off + 1]);
   }
   return m68k_fetch16(pc);                    /* refill (mac.c) */
 }

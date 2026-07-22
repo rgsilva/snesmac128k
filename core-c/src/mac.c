@@ -32,12 +32,12 @@ static const uint8_t *rom;                 /* 64 KB */
 #  define RAM_WR16(a, v) (ram[a] = (uint8_t)((v) >> 8), ram[(a) + 1] = (uint8_t)(v))
 #  define ROM_RD16(a)    ((uint16_t)(((uint16_t)rom[a] << 8) | rom[(a) + 1]))
 #endif
-int                   mac_overlay_on;      /* 1 at reset: ROM at $0. Non-static:
+M68K_HOT int          mac_overlay_on;      /* 1 at reset: ROM at $0. Non-static:
                                            ** the m68k core's inline bus fast
                                            ** paths (snes/m68kbus.h) test it. */
 #define overlay mac_overlay_on             /* local alias, minimal diff */
 static uint32_t       vbl_count;
-static uint16_t       vbl_timer;           /* down-counter to the next VBL: a
+static M68K_HOT uint16_t vbl_timer;        /* down-counter to the next VBL: a
                                            ** 16-bit compare-to-zero, where the
                                            ** old `instr_count % VBL_PERIOD` was
                                            ** a 32-bit runtime division EVERY
@@ -47,7 +47,7 @@ static uint16_t       vbl_timer;           /* down-counter to the next VBL: a
 static uint8_t via_orb, via_ora, via_ddrb, via_ddra;
 static uint8_t via_ifr, via_ier;
 static uint8_t via_acr, via_pcr, via_sr;
-static uint16_t via_t1, via_t2;
+static M68K_HOT uint16_t via_t1, via_t2;
 
 /* VBL cadence: the real machine is 60.15 Hz (~130k CPU cycles). We don't count
 ** cycles, so approximate with an instruction count — exact rate doesn't affect
@@ -273,8 +273,10 @@ void m68k_write32(uint32_t a, uint32_t v){
 #ifdef MAC_SNES
 #define FETCH_TAG_INVALID 0xFFFFFFFFul
 /* non-static: the core's inline fetch hit-path (snes/m68kbus.h) reads these */
-uint32_t mac_fetch_tag = FETCH_TAG_INVALID;       /* pc & 0xFFFFE000 of the block */
-const volatile __far uint8_t *mac_fetch_base;     /* -> block byte 0 */
+M68K_HOT uint32_t mac_fetch_tag = FETCH_TAG_INVALID;   /* pc & 0xFFFFE000 of the block */
+M68K_HOT uint32_t mac_fetch_base;   /* SNES address of block byte 0 (a raw
+                                    ** 24-bit address, not a pointer: Calypsi
+                                    ** can't park a far pointer in __tiny) */
 #define fetch_tag  mac_fetch_tag
 #define fetch_base mac_fetch_base
 static void mac_fetch_invalidate(void){ fetch_tag = FETCH_TAG_INVALID; }
@@ -285,19 +287,20 @@ uint16_t m68k_fetch16(uint32_t pc){
     uint32_t a = pc & 0xFFFFFFul;
     if (a < 0x400000ul) {
       if (!overlay)
-        fetch_base = mac_ram_ptr8(a & 0x1E000ul);
+        fetch_base = (uint32_t)mac_ram_ptr8(a & 0x1E000ul);
       else
-        fetch_base = (const volatile __far uint8_t *)(0xC80000ul + (a & 0xE000ul));
+        fetch_base = 0xC80000ul + (a & 0xE000ul);
     } else if (a < 0x500000ul) {
-      fetch_base = (const volatile __far uint8_t *)(0xC80000ul + (a & 0xE000ul));
+      fetch_base = 0xC80000ul + (a & 0xE000ul);
     } else if (a >= 0x600000ul && a < 0x800000ul && overlay) {
-      fetch_base = mac_ram_ptr8(a & 0x1E000ul);
+      fetch_base = (uint32_t)mac_ram_ptr8(a & 0x1E000ul);
     } else {
       return m68k_read16(pc);                     /* PC in I/O space: don't cache */
     }
     fetch_tag = tag;
   }
-  return (uint16_t)(((uint16_t)fetch_base[off] << 8) | fetch_base[off + 1]);
+  { const volatile __far uint8_t *p = (const volatile __far uint8_t *)fetch_base;
+    return (uint16_t)(((uint16_t)p[off] << 8) | p[off + 1]); }
 }
 #else
 static void mac_fetch_invalidate(void){}
@@ -457,7 +460,7 @@ static void fastboot_apply(void){
 #else
   { uint32_t i; for (i = 0; i < MAC_RAM_SIZE; i++) RAM_WR(i, fastboot_ram[i]); }
 #endif
-  for (r = 0; r < 8; r++) { m68kc.d[r] = macfb_d[r]; m68kc.a[r] = macfb_a[r]; }
+  for (r = 0; r < 8; r++) { M68K_DREG(r) = macfb_d[r]; M68K_AREG(r) = macfb_a[r]; }
   m68kc.sr = MACFB_SR; m68kc.usp = MACFB_USP; m68kc.isp = MACFB_ISP;
   m68kc.pc = MACFB_PC;
   mac_dbg_via_load(macfb_via);

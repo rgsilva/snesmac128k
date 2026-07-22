@@ -23,8 +23,8 @@ static uint32_t macp_fold32(uint32_t h, uint32_t v){
 static uint32_t macp_fnv1(uint32_t h, uint8_t b){ return macp_fold32(h, (uint32_t)b); }
 static uint32_t macp_hash_cpu(uint32_t h){
   int i;
-  for (i = 0; i < 8; i++) h = macp_fold32(h, m68kc.d[i]);
-  for (i = 0; i < 8; i++) h = macp_fold32(h, m68kc.a[i]);
+  for (i = 0; i < 8; i++) h = macp_fold32(h, M68K_DREG(i));
+  for (i = 0; i < 8; i++) h = macp_fold32(h, M68K_AREG(i));
   h = macp_fold32(h, m68kc.pc);
   h = macp_fold32(h, m68kc.usp);
   h = macp_fold32(h, m68kc.isp);

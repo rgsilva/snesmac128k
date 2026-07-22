@@ -11,6 +11,16 @@
 
 #include <stdint.h>
 
+/* On Calypsi/SNES the CPU context lives in the DIRECT PAGE (dp addressing is
+** ~2x cheaper than 24-bit absolute, and the register file is touched several
+** times per emulated instruction; the hand-asm inner loop shares the same
+** layout). Elsewhere it's a normal object. */
+#ifdef __CALYPSI__
+#  define M68K_HOT __tiny
+#else
+#  define M68K_HOT
+#endif
+
 typedef struct {
   uint32_t d[8];
   uint32_t a[8];     /* a[7] is the active stack pointer */
@@ -22,7 +32,21 @@ typedef struct {
   uint8_t  irq;      /* pending autovector IRQ level 0-7 (set by the machine) */
 } m68k_t;
 
-extern m68k_t m68kc;
+extern M68K_HOT m68k_t m68kc;
+
+/* Dynamic-index access to the register file. Calypsi 5.17 ICEs on a variable
+** index into a __tiny array (CGHelpers.hs mem8Reg, non-exhaustive pattern);
+** indexing through a __near pointer to the same DP storage compiles fine and
+** stays cheap (bank-0 [dp],y). Constant indexes (m68kc.a[7], m68kc.pc, ...)
+** don't trip the bug and get pure direct-page addressing — use these macros
+** only where the index is a variable. */
+#ifdef __CALYPSI__
+#  define M68K_DREG(r) (((__near uint32_t *)&m68kc.d[0])[(r)])
+#  define M68K_AREG(r) (((__near uint32_t *)&m68kc.a[0])[(r)])
+#else
+#  define M68K_DREG(r) (m68kc.d[r])
+#  define M68K_AREG(r) (m68kc.a[r])
+#endif
 
 /* big-endian memory interface, provided by the embedder (24-bit address bus) */
 extern uint8_t  m68k_read8(uint32_t addr);
