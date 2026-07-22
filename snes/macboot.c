@@ -57,11 +57,14 @@ static int panXb = 16, panY = 0;
 /* Mouse (the d-pad with L up): mx,my is the cursor in Mac screen coords
 ** (0..511 / 0..341); A clicks. Fed to the Mac via mac_set_mouse; the Mac then
 ** redraws its own cursor on its VBL, so it lags on the slow CPU. */
+#include "macmem.h"                   /* mac_ram_rd: reading the Mac's globals */
+
 #define RUN_BATCH  32                 /* instructions per mac_run/input poll */
 #define MOUSE_STEP 4                  /* pixels per input poll */
 #define CLICK_HOLD 600                /* polls: 600*32 = 19200 steps > one VBL
                                       ** (12000), so a tap of A is seen */
 static int mx = 256, my = 171, last_btn = 0;
+static uint8_t mouse_synced;          /* first input adopts the Mac's RawMouse */
 static uint32_t click_hold = 0;
 
 /* DMA the two SRAM tile-buffer windows to VRAM word $1000 (A-bus -> $2118/9). */
@@ -167,7 +170,18 @@ static int handle_input(void){
     if (panY  < 0) panY  = 0; else if (panY  > 118) panY  = 118;
     return (panXb != ox) || (panY != oy);
   } else {                             /* MOUSE */
-    int omx = mx, omy = my, a = (p & 0x0080u) ? 1 : 0, btn;
+    int omx, omy, a, btn;
+    if (!mouse_synced) {               /* adopt the Mac's real cursor position:
+                                       ** ours started as a guess, and the first
+                                       ** press used to TELEPORT the cursor to it
+                                       ** (RawMouse $082C = Point{v,h}) */
+      my = (int)((mac_ram_rd(0x082Cu) << 8) | mac_ram_rd(0x082Du));
+      mx = (int)((mac_ram_rd(0x082Eu) << 8) | mac_ram_rd(0x082Fu));
+      if (mx < 0 || mx > 511) mx = 256;
+      if (my < 0 || my > 341) my = 171;
+      mouse_synced = 1;
+    }
+    omx = mx; omy = my; a = (p & 0x0080u) ? 1 : 0;
     if (a) click_hold = CLICK_HOLD;    /* A held tops it up; a tap decays over CLICK_HOLD */
     btn = (a || click_hold) ? 1 : 0;   /* so the button stays down long enough to span a VBL */
     if (p & 0x0200u) mx -= MOUSE_STEP; /* Left */
