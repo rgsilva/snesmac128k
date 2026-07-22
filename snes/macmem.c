@@ -13,8 +13,9 @@
 */
 #include <stdint.h>
 
-/* SNES address of Mac RAM cell a: base $206000 + window*$10000 + (a & $1FFF). */
-#define MAC_SRAM(a)  (0x206000ul + ((a) >> 13) * 0x10000ul + ((a) & 0x1FFFul))
+/* SNES address of Mac RAM cell a: base $A06000 (the FAST mirror of $206000;
+** banks $80-$FF run at 6 master clocks with MEMSEL) + window*$10000 + (a & $1FFF). */
+#define MAC_SRAM(a)  (0xA06000ul + ((a) >> 13) * 0x10000ul + ((a) & 0x1FFFul))
 
 uint8_t mac_ram_rd(uint32_t a){
   volatile __far uint8_t *p = (volatile __far uint8_t *)MAC_SRAM(a);

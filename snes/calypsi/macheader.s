@@ -18,7 +18,7 @@
 ;;; Header $FFC0-$FFDF
               .section snesheader, root
               .ascii  "SNESMAC LIVE         "   ; 21-byte title
-              .byte   0x21           ; map mode: HiROM, slow
+              .byte   0x31           ; map mode: HiROM, FastROM (MEMSEL set by main)
               .byte   0x02           ; cartridge type: ROM+RAM+battery
               .byte   0x0b           ; ROM size: 2 MB (holds code + ROM + disk)
               .byte   0x08           ; RAM size: 256 KB requested

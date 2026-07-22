@@ -13,6 +13,8 @@
 #include "macparity_hash.h"
 #include "macparity_ref.h"      /* MACP_N, MACP_CPUHASH, MACP_RAMHASH (host) */
 
+#define REG8(a) (*(volatile uint8_t *)(unsigned long)(a))
+
 uint8_t mac_ram_rd(uint32_t a);
 void    mac_ram_wr(uint32_t a, uint8_t v);
 uint8_t mac_rom_rd(uint32_t a);
@@ -22,6 +24,7 @@ int main(void){
   uint32_t i;
   mb_init();
   mb_puts("macparity: Mac machine on SNES vs host\n");
+  REG8(0x420D) = 0x01;                  /* MEMSEL: FastROM (map mode $31) */
 
   /* SRAM round-trip sanity (two spread-out Mac RAM cells). */
   mac_ram_wr(0x00100, 0x5A); mac_ram_wr(0x1FE00, 0xA5);

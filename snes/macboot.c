@@ -31,7 +31,7 @@
 
 /* framebuffer byte -> cart-SRAM address (8 KB windows at banks $20-$2F:6000),
 ** same mapping as macmem.c but used here once per fb row, not per byte. */
-#define FB_SRAM(a)    (0x206000ul + ((a) >> 13) * 0x10000ul + ((a) & 0x1FFFul))
+#define FB_SRAM(a)    (0xA06000ul + ((a) >> 13) * 0x10000ul + ((a) & 0x1FFFul))
 
 /* The visible window into the Mac screen. panXb is the left edge in framebuffer
 ** BYTES (x8 = pixels), 0..32; panY is the top edge in pixel rows, 0..118 — the
@@ -139,6 +139,7 @@ int main(void){
   uint32_t idle = 0;
   mb_init();
   mb_puts("macboot: live Mac 128K on the SNES -- d-pad: mouse, A: click, L+d-pad: pan\n");
+  REG8(0x420D) = 0x01;                  /* MEMSEL: FastROM (map mode $31) */
   REG8(0x4200) = 0x01;                  /* enable auto joypad read (no NMI) */
   video_init();
   mac_init(0);                          /* ROM in cart, RAM (SRAM) cleared */

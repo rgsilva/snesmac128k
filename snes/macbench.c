@@ -23,7 +23,7 @@ uint8_t mac_ram_rd(uint32_t a);          /* macmem.c (declare: 16-bit-int ABI!) 
 #define TW 32
 #define TH 28
 #define TILEBYTES (TW * TH * 16)
-#define FB_SRAM(a) (0x206000ul + ((a) >> 13) * 0x10000ul + ((a) & 0x1FFFul))
+#define FB_SRAM(a) (0xA06000ul + ((a) >> 13) * 0x10000ul + ((a) & 0x1FFFul))
 
 static void blit_tiles(void){
   REG8(0x2115) = 0x80; REG16(0x2116) = 0x1000;
@@ -65,6 +65,7 @@ int main(void){
   uint16_t prev = 0; uint8_t poll = 0;
   mb_init();
   mb_puts("macbench: our own 68000 ROM, phased workload\n");
+  REG8(0x420D) = 0x01;                  /* MEMSEL: FastROM (map mode $31) */
   video_init();
   mac_init(0);
   mac_set_disk(0, 409600ul);             /* dummy: arm the per-step trap guard */

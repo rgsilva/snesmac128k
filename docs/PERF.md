@@ -183,10 +183,16 @@ turned out to compile to the identical runtime call. Measure, land, repeat.
 (13,985 instructions); columns are frames per phase (fewer = faster). The
 CRC must print `A97233CE` on both host and SNES, every row.
 
-| change | total | nop | alu | ram.b | ram.w | ram.l | shift | muldiv | copy | fbfill | ≈instr/s |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| baseline (`63e1e1c`) | 2234 | 136 | 163 | 163 | 175 | 192 | 176 | 110 | 125 | 952 | 376 |
-| G `--no-cross-call` | 2233 | 136 | 163 | 163 | 175 | 192 | 176 | 110 | 124 | 952 | 376 |
+"Total" = frames for phases 1–10 (13,985 instructions; the `trap` phase, added
+with change A, is listed separately since earlier rows predate it).
+
+| change | total | nop | alu | ram.b | ram.w | ram.l | shift | muldiv | copy | fbfill | trap | ≈instr/s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| baseline (`63e1e1c`) | 2234 | 136 | 163 | 163 | 175 | 192 | 176 | 110 | 125 | 952 | — | 376 |
+| G `--no-cross-call` | 2233 | 136 | 163 | 163 | 175 | 192 | 176 | 110 | 124 | 952 | — | 376 |
+| B VBL down-counter | 1503 | 79 | 106 | 107 | 117 | 135 | 119 | 82 | 94 | 630 | — | 558 |
+| A fetch-once + hook | 1309 | 64 | 91 | 91 | 102 | 120 | 104 | 74 | 86 | 544 | 47 | 641 |
+| C FastROM ($31+MEMSEL) | 1139 | 55 | 79 | 79 | 89 | 105 | 90 | 64 | 76 | 474 | 42 | 737 |
 
 Reading the baseline: a bare NOP costs ~44,600 master clocks — the floor
 every instruction pays (two full fetch16s: the real one plus the sony-trap
