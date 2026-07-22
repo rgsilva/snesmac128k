@@ -20,7 +20,8 @@
               .ascii  "SNESMAC LIVE         "   ; 21-byte title
               .byte   0x31           ; map mode: HiROM, FastROM (MEMSEL set by main)
               .byte   0x02           ; cartridge type: ROM+RAM+battery
-              .byte   0x0b           ; ROM size: 2 MB (holds code + ROM + disk)
+              .byte   0x0c           ; ROM size: 4 MB (code + Mac ROM + disk 1 +
+                                     ; fastboot state + the optional disk 2)
               .byte   0x08           ; RAM size: 256 KB requested
               .byte   0x01           ; country: USA (NTSC)
               .byte   0x33           ; licensee: extended header present

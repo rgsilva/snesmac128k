@@ -31,10 +31,10 @@ static void hook(int tnum, uint32_t pos, uint32_t cnt){
 extern void (*mac_sony_hook)(int, uint32_t, uint32_t);
 
 int main(int argc, char **argv){
-  static uint8_t rom[65536]; static uint8_t disk[409600];
-  FILE *f, *oh, *ob; long dn = 0, i;
+  static uint8_t rom[65536]; static uint8_t disk[409600]; static uint8_t disk2[409600];
+  FILE *f, *oh, *ob; long dn = 0, dn2 = 0, i;
 
-  if (argc < 5) { fprintf(stderr, "usage: macfastboot_gen rom disk ref.h ram.bin\n"); return 2; }
+  if (argc < 5) { fprintf(stderr, "usage: macfastboot_gen rom disk ref.h ram.bin [disk2]\n"); return 2; }
   f = fopen(argv[1], "rb");
   if (!f || fread(rom, 1, 65536, f) != 65536) { fprintf(stderr, "bad rom\n"); return 2; }
   fclose(f);
@@ -42,15 +42,23 @@ int main(int argc, char **argv){
   if (!f) { fprintf(stderr, "bad disk\n"); return 2; }
   dn = (long)fread(disk, 1, sizeof disk, f); fclose(f);
 
+  if (argc > 5) {
+    f = fopen(argv[5], "rb");
+    if (!f) { fprintf(stderr, "bad disk2\n"); return 2; }
+    dn2 = (long)fread(disk2, 1, sizeof disk2, f); fclose(f);
+  }
+
   /* pass 1: step count of the first .Sony read */
   mac_sony_hook = hook;
   mac_init(rom); mac_set_disk(disk, (uint32_t)dn);
+  if (dn2) mac_set_disk2(disk2, (uint32_t)dn2);
   for (stepno = 0; stepno < MAX_STEPS && first_read < 0; stepno++) mac_step();
   if (first_read < 0) { fprintf(stderr, "no disk read in %ld steps\n", MAX_STEPS); return 1; }
 
   /* pass 2: stop just BEFORE that step — PC points at the trap word */
   mac_sony_hook = 0;
   mac_init(rom); mac_set_disk(disk, (uint32_t)dn);
+  if (dn2) mac_set_disk2(disk2, (uint32_t)dn2);
   for (i = 0; i < first_read; i++) mac_step();
 
   oh = fopen(argv[3], "w"); ob = fopen(argv[4], "wb");

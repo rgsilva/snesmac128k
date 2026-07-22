@@ -23,6 +23,11 @@ int main(int argc, char **argv){
     if (df) { size_t dn = fread(disk, 1, sizeof disk, df); fclose(df);
       mac_set_disk(disk, (uint32_t)dn); printf("disk: %zu bytes loaded\n", dn); }
     else printf("no disk image (roms/sys11_data.bin) — no floppy\n");
+    { static uint8_t disk2[409600];
+      FILE *d2 = fopen("roms/disk2_data.bin", "rb");
+      if (d2) { size_t n2 = fread(disk2, 1, sizeof disk2, d2); fclose(d2);
+        mac_set_disk2(disk2, (uint32_t)n2);
+        printf("disk2: %zu bytes loaded (external drive)\n", n2); } }
   }
   printf("reset: SP=%08X PC=%08X\n", m68kc.a[7], m68kc.pc);
 

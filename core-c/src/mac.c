@@ -21,6 +21,7 @@ void mac_fastboot_load(void);              /* calypsi/tilecopy.s: MVN copy */
 #  define RAM_RD16(a)    mac_ram_rd16(a)
 #  define RAM_WR16(a, v) mac_ram_wr16((a), (v))
 #  define ROM_RD16(a)    mac_rom_rd16(a)
+#  define DISK2_RD(a)    mac_disk2_rd(a)
 #else
 static uint8_t        ram[MAC_RAM_SIZE];
 static const uint8_t *rom;                 /* 64 KB */
@@ -28,6 +29,7 @@ static const uint8_t *rom;                 /* 64 KB */
 #  define RAM_WR(a, v)   (ram[a] = (v))
 #  define ROM_RD(a)      rom[a]
 #  define DISK_RD(a)     disk_data[a]
+#  define DISK2_RD(a)    disk2_data[a]
 #  define RAM_RD16(a)    ((uint16_t)(((uint16_t)ram[a] << 8) | ram[(a) + 1]))
 #  define RAM_WR16(a, v) (ram[a] = (uint8_t)((v) >> 8), ram[(a) + 1] = (uint8_t)(v))
 #  define ROM_RD16(a)    ((uint16_t)(((uint16_t)rom[a] << 8) | rom[(a) + 1]))
@@ -65,6 +67,7 @@ uint8_t *mac_ram_ptr(void)   { return ram; }    /* host tools read the framebuff
 #endif
 int mac_dbg_ier(void){ return via_ier; }
 int mac_dbg_ifr(void){ return via_ifr; }
+int mac_dbg_iwm_lines(void);   /* defined below, after the IWM state */
 
 /* Whole-VIA snapshot (for the MAC_FASTBOOT warm state; harmless elsewhere). */
 void mac_dbg_via_dump(uint8_t v[16]);
@@ -147,17 +150,33 @@ void mac_dbg_via_load(const uint8_t v[16]){
 /* optional trace hook (host debugging): (addr, write?, iwm lines, value) */
 void (*mac_iwm_hook)(uint32_t a, int wr, unsigned lines, unsigned val) = 0;
 
+static uint32_t disk2_size;              /* declared early: drive_sense reads it */
+
 /* Sony 400K drive: the ROM selects a drive register with ca0-2 + SEL and reads
 ** it on the status SENSE bit (bit 7); it steps the head with LSTRB strobes and
 ** reads GCR data via the data register. We model "disk present" + the sense
 ** lines and head position; GCR data streaming comes next. */
 static int      disk_in = 1, drive_track = 0, motor_on = 0, step_dir = 0;
+static int      drive_sel;               /* IWM line 5: 0 = internal, 1 = external
+                                         ** (probed empirically: the boot-disk
+                                         ** sense sequence runs with sel5=0) */
 static uint16_t tach_ctr;
 static uint8_t  iwm_lines, iwm_mode;
 
 void (*mac_sense_hook)(int reg, int val) = 0;   /* host debugging */
+int mac_dbg_iwm_lines(void){ return iwm_lines; }
 
 static int drive_sense(void){
+  /* Which DRIVE is selected comes from the IWM SELECT line (line 5): the
+  ** external drive exists only when a second disk image is configured —
+  ** otherwise every sense line reads high, the classic "nothing connected"
+  ** pull-up reading, and the ROM never creates its drive-queue entry.
+  ** (Before this check the stub answered "drive present, disk inserted" for
+  ** BOTH drives, and the desktop grew a phantom second System Disk.) */
+  if (drive_sel && !disk2_size) {
+    if (mac_sense_hook) mac_sense_hook(-1, 1);
+    return 1;
+  }
   /* Sony read register = (CA2,CA1,CA0,SEL); SEL is VIA port A bit 5 (not the
   ** IWM SELECT line). Authoritative mapping (Inside Mac / MAME sonydriv). */
   int ca0 = iwm_lines & 1, ca1 = (iwm_lines >> 1) & 1, ca2 = (iwm_lines >> 2) & 1;
@@ -187,6 +206,7 @@ static uint8_t iwm_access(uint32_t a, int is_write, uint8_t wv){
   uint8_t rv = 0;
   int old_lstrb = (iwm_lines >> 3) & 1;
   if (reg & 1) iwm_lines |= (uint8_t)(1u << (reg >> 1)); else iwm_lines &= (uint8_t)~(1u << (reg >> 1));
+  drive_sel = (iwm_lines >> 5) & 1;      /* SELECT: internal / external drive */
   {
     int q6 = (iwm_lines >> 6) & 1, q7 = (iwm_lines >> 7) & 1, en = (iwm_lines >> 4) & 1;
     int lstrb = (iwm_lines >> 3) & 1;
@@ -344,7 +364,10 @@ void mac_init(const uint8_t *rom_){
 ** emulation. ioPosOffset is the byte offset of the block on the disk. */
 static const uint8_t *disk_data;
 static uint32_t       disk_size;
+static const uint8_t *disk2_data;        /* the EXTERNAL drive's image (optional) */
+static uint32_t       disk2_size;
 void mac_set_disk(const uint8_t *data, uint32_t size){ disk_data = data; disk_size = size; }
+void mac_set_disk2(const uint8_t *data, uint32_t size){ disk2_data = data; disk2_size = size; }
 void (*mac_sony_hook)(int tnum, uint32_t pos, uint32_t cnt) = 0;   /* host debugging */
 
 /* HLE the mouse: rather than emulate the quadrature hardware + its interrupts,
@@ -396,7 +419,9 @@ static int sony_trap(uint16_t op){
     uint32_t e = m68k_read32(0x030A);             /* DrvQHdr.qHead */
     while (e && e < MAC_RAM_SIZE) {
       if ((int16_t)m68k_read16(e + 12) == 0) {    /* dQDrvSz still unset */
-        m68k_write16(e + 12, (uint16_t)(disk_size / 512u));  /* logical blocks */
+        int qdrv = (int16_t)m68k_read16(e + 6);   /* dQDrive: 1=internal 2=ext */
+        uint32_t sz = (qdrv == 2) ? disk2_size : disk_size;
+        m68k_write16(e + 12, (uint16_t)(sz / 512u));   /* logical blocks */
         m68k_write16(e + 14, 0);                  /* dQDrvSz2 (high word) */
       }
       e = m68k_read32(e);                          /* qLink -> next element */
@@ -407,7 +432,12 @@ static int sony_trap(uint16_t op){
     uint32_t buf = m68k_read32(pb + 0x20);        /* ioBuffer */
     uint32_t cnt = m68k_read32(pb + 0x24);        /* ioReqCount */
     uint32_t pos = m68k_read32(pb + 0x2E);        /* ioPosOffset (byte offset) */
+    int drv = (int16_t)m68k_read16(pb + 0x16);    /* ioVRefNum = drive number */
     uint32_t k;
+    if (drv == 2) {                               /* the external drive */
+      for (k = 0; k < cnt; k++)
+        m68k_write8(buf + k, (pos + k < disk2_size) ? DISK2_RD(pos + k) : 0);
+    } else
     for (k = 0; k < cnt; k++)
       m68k_write8(buf + k, (pos + k < disk_size) ? DISK_RD(pos + k) : 0);
     m68k_write32(pb + 0x28, cnt);                 /* ioActCount */

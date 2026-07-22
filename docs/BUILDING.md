@@ -94,3 +94,5 @@ make parity           # M2: the 68000 core alone, host<->SNES parity on a direct
 make macvideo         # M4: a captured Mac framebuffer displayed on the SNES (static)
 make hello            # M0: the build/plumbing spike
 ```
+
+(see COMPATIBILITY.md for the optional second disk)

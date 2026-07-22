@@ -161,10 +161,18 @@ test-bench: $(BUILD)/macbench.sfc $(BUILD)/benchhost
 # boot. The warm state is generated from the user's own ROM+disk at build
 # time (like macparity_ref.h) and never committed.
 FASTBOOT ?= 1
+# Optional second (external-drive) disk image: drop any 400 KB raw image at
+# roms/disk2_data.bin and the Finder gets a second volume; without it the
+# external drive reports empty sense lines and the ROM sees one drive.
+DISK2 := $(wildcard ../roms/disk2_data.bin)
+ifneq ($(DISK2),)
+DISK2_FLAG := -DDISK2_SIZE=$(shell stat -f%z $(DISK2))ul
+DISK2_BLOB := --at 0x200000 $(DISK2)
+endif
 $(BUILD)/macfbgen: ../core-c/tests/macfastboot_gen.c ../core-c/src/mac.c ../core-c/src/m68k.c | $(BUILD)
 	cc -O2 -std=c11 -I../core-c/src -o $@ ../core-c/tests/macfastboot_gen.c ../core-c/src/mac.c ../core-c/src/m68k.c
-$(BUILD)/macfastboot_ref.h $(BUILD)/macfastboot_ram.bin: $(BUILD)/macfbgen ../roms/mac128k.rom ../roms/sys11_data.bin
-	$(BUILD)/macfbgen ../roms/mac128k.rom ../roms/sys11_data.bin $(BUILD)/macfastboot_ref.h $(BUILD)/macfastboot_ram.bin
+$(BUILD)/macfastboot_ref.h $(BUILD)/macfastboot_ram.bin: $(BUILD)/macfbgen ../roms/mac128k.rom ../roms/sys11_data.bin $(DISK2)
+	$(BUILD)/macfbgen ../roms/mac128k.rom ../roms/sys11_data.bin $(BUILD)/macfastboot_ref.h $(BUILD)/macfastboot_ram.bin $(DISK2)
 $(BUILD)/macfast.o: ../core-c/src/mac.c ../core-c/src/mac.h ../core-c/src/m68k.h macmem.h $(BUILD)/macfastboot_ref.h | $(BUILD)
 	$(CC) -o $@ ../core-c/src/mac.c $(MACSNES_CFLAGS) -DMAC_FASTBOOT --list-file=$(@:.o=.lst)
 
@@ -183,11 +191,11 @@ endif
 $(BUILD)/maczoom_tab.h: tools/mkzoomtab.py | $(BUILD)
 	python3 tools/mkzoomtab.py $@
 $(BUILD)/macboot.o: macboot.c calypsi/mailbox.h ../core-c/src/mac.h $(BUILD)/maczoom_tab.h | $(BUILD)
-	$(CC) -o $@ macboot.c $(MACSNES_CFLAGS) $(MACBOOT_FLAG) --list-file=$(@:.o=.lst)
+	$(CC) -o $@ macboot.c $(MACSNES_CFLAGS) $(MACBOOT_FLAG) $(DISK2_FLAG) --list-file=$(@:.o=.lst)
 $(BUILD)/macboot.raw: $(BUILD)/macheader.o $(BUILD)/tilecopy.o $(BUILD)/m68krun.o $(BUILD)/macmailbox.o $(BUILD)/macm68k.o $(MACBOOT_MACO) $(BUILD)/macboot.o
 	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macboot.map $^
-$(BUILD)/macboot.sfc: $(BUILD)/macboot.raw tools/raw2sfc.py ../roms/mac128k.rom ../roms/sys11_data.bin $(MACBOOT_DEPS)
-	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom --at 0x100000 ../roms/sys11_data.bin $(MACBOOT_BLOB)
+$(BUILD)/macboot.sfc: $(BUILD)/macboot.raw tools/raw2sfc.py ../roms/mac128k.rom ../roms/sys11_data.bin $(MACBOOT_DEPS) $(DISK2)
+	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom --at 0x100000 ../roms/sys11_data.bin $(MACBOOT_BLOB) $(DISK2_BLOB)
 
 .PHONY: macboot test-macboot
 macboot: $(BUILD)/macboot.sfc

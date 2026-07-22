@@ -74,5 +74,9 @@ static inline uint8_t mac_disk_rd(uint32_t a){
   const __far uint8_t *p = (const __far uint8_t *)(0xD00000ul + a);
   return *p;
 }
+static inline uint8_t mac_disk2_rd(uint32_t a){   /* external drive @ $E00000 */
+  const __far uint8_t *p = (const __far uint8_t *)(0xE00000ul + a);
+  return *p;
+}
 
 #endif

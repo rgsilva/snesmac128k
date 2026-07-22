@@ -215,6 +215,10 @@ int main(void){
   video_init();
   mac_init(0);                          /* ROM in cart, RAM cleared */
   mac_set_disk(0, DISK_SIZE);           /* enable the HLE .Sony (disk at $D00000) */
+#ifdef DISK2_SIZE
+  mac_set_disk2(0, DISK2_SIZE);         /* the EXTERNAL drive ($E00000): present
+                                        ** only when roms/disk2_data.bin exists */
+#endif
 #ifdef MAC_FASTBOOT
   mac_fastboot_arm(0);                  /* skip the RAM test + boot chime: teleport
                                         ** to the first disk read (state embedded

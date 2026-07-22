@@ -46,8 +46,11 @@ editor and all:
   less than it used to: redraws are ~13× cheaper and the machine ~6× faster since
   the first boots (see [PERF.md](PERF.md)). The **keyboard** isn't wired up yet,
   so no typing; that's next (see [FUTURE.md](FUTURE.md)).
-- **One disk, read-only.** A single 400 KB System floppy is served from the cartridge.
-  Writes are acknowledged but not persisted; there's no second drive.
+- **Two drives, read-only.** The internal drive serves the 400 KB System floppy from
+  the cartridge; drop a second 400 KB image at `roms/disk2_data.bin` and it appears in
+  the **external drive** — a second volume on the desktop (an apps disk, say — MacPaint
+  or MacWrite from the same archives). Without it the external drive's sense lines read
+  empty and the ROM sees one drive. Writes are acknowledged but not persisted on either.
 - **The display is a 256×224 window** into the 512×342 Mac screen (the SNES can't show
   the whole 1-bit screen at 1:1 — a background addresses only 1024 tiles; the full
   screen is 2752). Two views, both live:
