@@ -78,8 +78,16 @@ make macboot-desktop  # teleport straight to the Finder desktop, not the boot
 make macboot-purist   # the faithful power-on (no teleport; very slow)
 make macparity        # -> build/macparity.sfc the host<->SNES parity ROM
 make test-macparity   # build + run the parity check in Mesen (expects "PARITY OK")
+make test-macparity-hot  # same boot, but through the hand-asm inner loop
 make test-macboot     # build + run the live boot in Mesen
 ```
+
+`test-macparity` steps the real ROM boot with the portable **C** core (validates
+Calypsi's codegen); `test-macparity-hot` steps the identical boot through the
+hand-65816 inner loop (`m68k_run_hot`) and checks the same host hash — the gate
+for the assembly native handlers on real code. Both raise `MACP_N` for a longer
+check (e.g. `make test-macparity-hot MACP_N=100000`); delete `build/macparity_ref.h`
+first, since the host reference is regenerated only when its file is missing.
 
 By default (`make macboot`) the boot **teleports** past the ROM's ~1.5M-instruction RAM
 test to the first disk read, so the Happy Mac shows up in moments and you watch it boot

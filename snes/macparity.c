@@ -5,6 +5,17 @@
 ** it). Proves the machine model + the SRAM/ROM memory backend are faithful on
 ** Calypsi before attempting the (very slow) full boot-to-desktop.
 **
+** Two builds from this one source (the reference is the SAME host hash either
+** way — macparity_ref.h):
+**   default    steps via mac_step()  -> the portable C core (validates the
+**              Calypsi-compiled core: the -O2 correctness baseline).
+**   -DMACP_HOT steps via mac_run(1)  -> the hand-65816 inner loop
+**              (calypsi/m68krun.s): validates the ASM native handlers against
+**              real boot code. The bench only exercises DBRA/BRA + long
+**              register ALU, so it cannot cover conditional Bcc, ADDQ #d,An,
+**              etc.; this can. Same VBL/timer storage, so the two stay in
+**              lockstep and the host hash still applies.
+**
 ** NB: every accessor MUST be declared — an implicit (C89) declaration makes
 ** Calypsi pass args with the 16-bit-int ABI, silently corrupting them. */
 #include <stdint.h>
@@ -19,12 +30,17 @@
 uint8_t mac_ram_rd(uint32_t a);
 void    mac_ram_wr(uint32_t a, uint8_t v);
 uint8_t mac_rom_rd(uint32_t a);
+void    mac_run(uint16_t n);            /* asm hot loop (calypsi/m68krun.s) */
 
 int main(void){
   uint32_t h = MACP_FNV_INIT, rh;
   uint32_t i;
   mb_init();
-  mb_puts("macparity: Mac machine on SNES vs host\n");
+#ifdef MACP_HOT
+  mb_puts("macparity-hot: asm inner loop (m68k_run_hot) vs host\n");
+#else
+  mb_puts("macparity: Mac machine (C core) on SNES vs host\n");
+#endif
   REG8(0x420D) = 0x01;                  /* MEMSEL: FastROM (map mode $31) */
 
   /* SRAM round-trip sanity (two spread-out Mac RAM cells). */
@@ -35,7 +51,12 @@ int main(void){
   mac_init(0);                          /* ROM in cart, RAM (SRAM) cleared */
   mb_puts("init\n");
   for (i = 0; i < MACP_N; i++) {
-    mac_step(); h = macp_hash_cpu(h);
+#ifdef MACP_HOT
+    mac_run(1);                         /* the hand-65816 inner loop */
+#else
+    mac_step();                         /* the portable C core */
+#endif
+    h = macp_hash_cpu(h);
     if ((i & 0xFF) == 0xFF) { mb_puts("@"); mb_puthex32(i + 1); mb_putc('\n'); }
   }
 

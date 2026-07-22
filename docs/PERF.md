@@ -179,12 +179,16 @@ turned out to compile to the identical runtime call. Measure, land, repeat.
 
 ## 6. Results
 
-`make -C snes test-bench` (fresh Mesen). Total = frames from phase 1 to done
-(13,985 instructions); columns are frames per phase (fewer = faster). The
-CRC must print `A97233CE` on both host and SNES, every row.
+`make -C snes test-bench` (fresh Mesen). Total = frames from phase 1 to done;
+columns are frames per phase (fewer = faster). The host and SNES CRC must match
+every row (`482acf71` since the `branch` phase was added — case-insensitively:
+the SNES prints lowercase hex, the host upper).
 
-"Total" = frames for phases 1–10 (13,985 instructions; the `trap` phase, added
-with change A, is listed separately since earlier rows predate it).
+"Total" = frames for phases 1–10 (the `trap` phase, added with change A, and the
+`branch` phase, added with 5e, are listed/counted separately since earlier rows
+predate them). The rows below predate the ~15,030-instruction `branch`-phase
+benchrom, so their absolute totals aren't comparable to a fresh run — the
+per-phase columns are.
 
 | change | total | nop | alu | ram.b | ram.w | ram.l | shift | muldiv | copy | fbfill | trap | ≈instr/s |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -325,7 +329,7 @@ included; subtract ~21 for machine-only):
 Round total ≈ 1.08× — and the decode reorder favors LEA/JSR/RTS-dense real
 boot code beyond what the nop-heavy bench can show.
 
-## 9. Item 5: the hand-65816 core (5a–5d)
+## 9. Item 5: the hand-65816 core (5a–5e)
 
 The ladder, each rung parity- and CRC-gated:
 
@@ -335,16 +339,31 @@ The ladder, each rung parity- and CRC-gated:
 | 5b | `m68k_exec(op)` split out of `m68k_step` | — |
 | 5c | **`calypsi/m68krun.s`**: the per-instruction skeleton in ~30 dp-addressed instructions (gate, fetch-cache hit + `xba`, PC bump, dispatch; slow path = the full C step, no sync needed — no private state) | 649 |
 | 5d | **native handlers** (exact flag-for-flag C mirrors, punt-before-mutate): NOP, MOVEQ×16, BRA.b, BNE.b, BEQ.b, DBRA | **615** |
+| 5e | **the branch + register-ALU set**: the *full* Bcc (all 14 conditions + BRA), ADDQ/SUBQ #d,An (no flags), and the long register-direct ALU — ADD/SUB/CMP/AND/OR.L Dn,Dn and ADDQ/SUBQ.L #d,Dn | `alu` **49 → 19** |
 
 The all-native `nop` phase collapsed **23 → 6 frames — ~330 CPU cycles per
-covered instruction, ~4×**. Found along the way: Calypsi 5.17 ICEs on a
-variable index into a `__tiny` array (worked around via a `__near` pointer
-into the same DP storage), and the linker won't emit in-bank 16-bit relocs
-for far-section symbols (hence the compare-chain dispatch and JML control
-flow).
+covered instruction, ~4×**. With 5e the `alu` phase (ADD/CMP/ADDQ.L, register
+direct) fell **49 → 19 frames (~2.6×**; EOR.L still punts, capping it short of
+the nop phase's 4×). Flags come straight from the 65816 ALU: two 16-bit
+`ADC`/`SBC` are one 32-bit op, and its N/V/Z/C map onto the 68000 SR (for
+SUB/CMP the 68000 carry is a borrow = the inverted 65816 carry). Found along
+the way: Calypsi 5.17 ICEs on a variable index into a `__tiny` array (worked
+around via a `__near` pointer into the same DP storage), and the linker won't
+emit in-bank 16-bit relocs for far-section symbols (hence the compare-chain
+dispatch and JML control flow).
 
-**Where item 5 goes next** (the handler set is designed to grow): the MOVE
-family (the most common ops in real code), ADDQ/SUBQ, RTS/JSR, TST, CMP —
-register-direct forms are cheap adds; memory EAs want the two-region RAM
-fast path replicated in asm. Beyond that: the later-teleport option
-("power-on to Finder in seconds"), then SA-1 (M7).
+**Validating the asm.** The per-step parity gate (`make test-macparity`) runs
+the *C* core on the SNES; it can't see the asm handlers. `make
+test-macparity-hot` steps the **same real-ROM boot through `m68k_run_hot`** and
+checks the identical host hash — the gate for handlers on real code (the boot
+exercises BNE/ADDQ-An/register-ALU densely; a later wait loop is BGT-bound).
+What the boot never does — the other 13 Bcc conditions — the bench's new
+`branch` phase covers exhaustively (every N/Z/V/C × every condition, folded into
+the CRC). Both gates: green. (The `branch` phase changed the golden CRC to
+`482acf71`, and exposed that `test-bench`'s compare was case-sensitive against a
+lowercase SNES / uppercase host hex — now normalised.)
+
+**Where item 5 goes next** (the handler set keeps growing): byte/word sizes for
+the ALU just added, then the memory-EA forms — MOVE (the most common op in real
+code) and CMPI, which dominate the RAM-test/boot mix but want the two-region RAM
+fast path replicated in asm — and RTS/JSR. Beyond that: SA-1 (M7).

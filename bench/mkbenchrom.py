@@ -93,6 +93,8 @@ class Emit:
     def addq_l_sp2(self):            self.w(0x54AF, 0x0002); self.n()  # ADDQ.L #2,2(A7)
     def move_l_imm_absl(self, imm, addr):
         self.w(0x23FC, imm >> 16, imm, addr >> 16, addr); self.n()
+    def move_ccr_imm(self, imm):     self.w(0x44FC, imm & 0x1F); self.n()  # MOVE #imm,CCR
+    def bcc_skip1(self, cond):       self.w(0x6000 | (cond << 8) | 0x02); self.n()  # Bcc.b over 1 word
 
     def label(self):                 return self.here()
 
@@ -185,6 +187,22 @@ def build():
     def fill_body():
         for _ in range(8): a.move_l_d_ainc(0, 0)
     a.loop(684, fill_body, 8)              # 684*32 = 21888 bytes: whole screen
+
+    a.mark(12, "branch")
+    # Exhaustive Bcc coverage the real boot never gives (it only ever takes
+    # BNE/BRA): every N/Z/V/C combination x every condition. MOVE #seed,CCR
+    # sets the flags; Bcc.b skips the ADDQ when taken; the unconditional ROL
+    # after makes D7 a position-sensitive hash of the whole taken/not-taken
+    # sequence, so a single wrong branch decision changes the final CRC. cond 1
+    # (BSR) is a call, not a plain branch, so it is omitted. D7 (0 since boot,
+    # untouched by the phases above) carries this hash into the crc phase.
+    conds = [0] + list(range(2, 16))
+    for seed in range(16):
+        for cond in conds:
+            a.move_ccr_imm(seed)
+            a.bcc_skip1(cond)                  # taken -> skip the ADDQ below
+            a.addq_l(1, 7)                     # not-taken path only: bump D7
+            a.rol_l_imm(1, 7)                  # always: fold position into D7
 
     a.mark(10, "crc")
     a.movea_l_imm(0x200, 0)                # 16 longs of the RAM buffer

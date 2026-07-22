@@ -126,6 +126,22 @@ macparity: $(BUILD)/macparity.sfc
 test-macparity: $(BUILD)/macparity.sfc
 	$(MESEN) --testrunner $(BUILD)/macparity.sfc test/macparity.lua
 
+# Same source, -DMACP_HOT: steps the real ROM through the hand-65816 inner loop
+# (m68k_run_hot) instead of the C core, so it validates the ASM native handlers
+# on real boot code — the coverage the bench's DBRA/BRA-only branches can't give.
+# Checks against the SAME host reference (macparity_ref.h).
+$(BUILD)/macparityhot.o: macparity.c $(BUILD)/macparity_ref.h ../core-c/tests/macparity_hash.h calypsi/mailbox.h | $(BUILD)
+	$(CC) -o $@ macparity.c $(MACSNES_CFLAGS) -DMACP_HOT --list-file=$(@:.o=.lst)
+$(BUILD)/macparityhot.raw: $(BUILD)/macheader.o $(BUILD)/tilecopy.o $(BUILD)/m68krun.o $(BUILD)/macmailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macparityhot.o
+	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macparityhot.map $^
+$(BUILD)/macparityhot.sfc: $(BUILD)/macparityhot.raw tools/raw2sfc.py ../roms/mac128k.rom
+	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom
+
+.PHONY: macparity-hot test-macparity-hot
+macparity-hot: $(BUILD)/macparityhot.sfc
+test-macparity-hot: $(BUILD)/macparityhot.sfc
+	$(MESEN) --testrunner $(BUILD)/macparityhot.sfc test/macparity.lua
+
 # ---- bench: OUR OWN 68000 ROM (bench/mkbenchrom.py — no Apple bytes) ----
 # benchhost prints the golden per-phase instruction counts + CRC; macbench runs
 # the same ROM on the SNES and test/macbench.lua stamps frames per phase.
@@ -148,8 +164,8 @@ bench-host: $(BUILD)/benchhost $(BUILD)/benchrom.bin
 test-bench: $(BUILD)/macbench.sfc $(BUILD)/benchhost
 	$(BUILD)/benchhost $(BUILD)/benchrom.bin | tee $(BUILD)/bench_host.txt
 	$(MESEN) --testrunner $(BUILD)/macbench.sfc test/macbench.lua | tee $(BUILD)/bench_snes.txt
-	@h=$$(grep '^CRC' $(BUILD)/bench_host.txt | awk '{print $$2}'); \
-	 s=$$(grep 'OUT CRC' $(BUILD)/bench_snes.txt | awk '{print $$3}'); \
+	@h=$$(grep '^CRC' $(BUILD)/bench_host.txt | awk '{print $$2}' | tr 'A-F' 'a-f'); \
+	 s=$$(grep 'OUT CRC' $(BUILD)/bench_snes.txt | awk '{print $$3}' | tr 'A-F' 'a-f'); \
 	 if [ -n "$$h" ] && [ "$$h" = "$$s" ]; then echo "BENCH CRC MATCH $$h"; \
 	 else echo "BENCH CRC MISMATCH host=$$h snes=$$s"; exit 1; fi
 
