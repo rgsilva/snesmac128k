@@ -51,9 +51,12 @@ The SNES shows a 256×224 window of the 512×342 Mac screen. The SNES can't show
   (8px horizontal, 4px vertical); the d-pad alone is left free for the mouse. The
   framebuffer read is done once per row so it stays responsive on the slow CPU. Still to
   add: smooth sub-tile scroll via the BG scroll registers.
-- **Fit-to-screen toggle** — **X** or **START** to downscale the full 512×342 into
-  ~256×171 (OR-ing 2×2 pixel blocks so thin 1px menu lines survive) so you can see
-  everything at once, and back to 1:1 pan for detail.
+- **Fit-to-screen toggle — done.** Tap **R** to see the whole 512×342 at once,
+  2×2-downscaled to 256×171 — with **four gray levels** rather than the planned
+  OR-blocks: the normal view is 1-bit, so the second plane of the SNES's 2bpp mode
+  and two spare palette entries were free, and the count-of-black-pixels average
+  renders the dithered desktop as true gray while 1px window borders stay visible
+  as dark gray. Tap R again for 1:1 pan.
 
 ## Reach further
 

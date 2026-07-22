@@ -180,7 +180,9 @@ MACBOOT_BLOB :=
 MACBOOT_DEPS :=
 endif
 
-$(BUILD)/macboot.o: macboot.c calypsi/mailbox.h ../core-c/src/mac.h | $(BUILD)
+$(BUILD)/maczoom_tab.h: tools/mkzoomtab.py | $(BUILD)
+	python3 tools/mkzoomtab.py $@
+$(BUILD)/macboot.o: macboot.c calypsi/mailbox.h ../core-c/src/mac.h $(BUILD)/maczoom_tab.h | $(BUILD)
 	$(CC) -o $@ macboot.c $(MACSNES_CFLAGS) $(MACBOOT_FLAG) --list-file=$(@:.o=.lst)
 $(BUILD)/macboot.raw: $(BUILD)/macheader.o $(BUILD)/tilecopy.o $(BUILD)/m68krun.o $(BUILD)/macmailbox.o $(BUILD)/macm68k.o $(MACBOOT_MACO) $(BUILD)/macboot.o
 	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macboot.map $^

@@ -49,11 +49,15 @@ editor and all:
 - **One disk, read-only.** A single 400 KB System floppy is served from the cartridge.
   Writes are acknowledged but not persisted; there's no second drive.
 - **The display is a 256×224 window** into the 512×342 Mac screen (the SNES can't show
-  the whole 1-bit screen at once — a background addresses only 1024 tiles; the full
-  screen is 2752). The window **pans** — **hold L** and the **d-pad** slides it, so you
-  can reach the menu bar, the disk icon, and the Trash to frame a shot (the d-pad on its
-  own is reserved for the mouse). A "fit the whole screen at once" (downscaled) mode is
-  still planned.
+  the whole 1-bit screen at 1:1 — a background addresses only 1024 tiles; the full
+  screen is 2752). Two views, both live:
+  - **1:1 pan** — **hold L** and the **d-pad** slides the window, to reach the menu
+    bar, the disk icon, the Trash (the d-pad on its own is the mouse);
+  - **zoom-out** — **tap R** to toggle the *whole screen at once*, 2×2-downscaled to
+    256×171 with **four gray levels**: the normal view is 1-bit, so the second plane
+    of the SNES's 2bpp mode and two spare palette entries were free, and the Mac's
+    dithered desktop averages to a true gray instead of collapsing to black. Aim the
+    mouse anywhere on the zoomed view, tap R again for full detail.
 - **System 2.0 is untested.** Only System 1.1 has been driven all the way to the desktop.
   Later Systems (and larger/800 KB disks) haven't been tried.
 

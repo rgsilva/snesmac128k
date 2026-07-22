@@ -7,7 +7,10 @@
 ** Controls (auto-read joypad): the d-pad moves the MOUSE and A clicks; hold L
 ** and the d-pad instead PANS the 256x224 window across the 512x342 Mac screen
 ** (the SNES can't show it all at once — a background addresses 1024 tiles, the
-** whole screen is 2752). The mouse is HLE'd straight into the Mac's low-memory
+** whole screen is 2752); R toggles the ZOOMED-OUT view — the whole screen,
+** 2x2-downscaled to 256x171 with four gray levels (we're in 2bpp Mode 0 and
+** the normal view only ever used two colors, so the second bitplane + CGRAM
+** colors 2/3 were free), letterboxed, table-driven (build/maczoom_tab.h). The mouse is HLE'd straight into the Mac's low-memory
 ** globals (mac_set_mouse); the Mac redraws its own cursor on its VBL, so the
 ** cursor lags on the slow CPU (fast-forward helps).
 **
@@ -41,6 +44,10 @@
 ** these globals (no Calypsi calling convention in asm) */
 extern void tile_rows(void);
 extern uint16_t tile_pan_xb, tile_pan_y;
+
+#include "maczoom_tab.h"              /* ZPC/ZP0/ZP1: 2x2->4-gray tables */
+static uint8_t zoom;                  /* 0 = 1:1 pan view, 1 = whole screen */
+static uint8_t r_prev;                /* R edge detect for the toggle */
 
 /* The visible window into the Mac screen. panXb is the left edge in framebuffer
 ** BYTES (x8 = pixels), 0..32; panY is the top edge in pixel rows, 0..118 — the
@@ -76,10 +83,61 @@ static void blit_tiles(void){
 ** -> plane0 = the framebuffer byte at (panXb+tx, panY+ty*8+r); plane1 is left 0
 ** (set once in video_init). The force-blank wraps only the DMA, so the screen
 ** blinks for a few ms, not for the whole (slow) tile rebuild. */
+/* The zoomed-out renderer: 2x2 blocks -> one 4-gray pixel, whole screen at
+** 256x171, letterboxed into tile rows 3-24 (3 blank rows above, ~3.6 below).
+** Per output byte: two table adds give eight 2x2 black-counts (nibble sums
+** can't carry — max 4), two more tables emit the bitplane pairs. ~C speed is
+** fine here: this view is for orientation, not fast interaction. */
+static void refresh_zoom(void){
+  uint16_t ty, tx; uint8_t r;
+  for (ty = 0; ty < TH; ty++) {
+    volatile __far uint8_t *tb = (ty < 16) ? TB0 : TB1;
+    uint16_t tbase = (uint16_t)(((ty < 16) ? ty : ty - 16) * TW * 16);
+    for (r = 0; r < 8; r++) {
+      int line = ty * 8 + r;
+      int orow = line - 24;             /* content rows: screen lines 24-194 */
+      uint16_t off = (uint16_t)(tbase + r * 2);
+      if (orow < 0 || orow >= 171) {
+        for (tx = 0; tx < TW; tx++) {
+          tb[(uint16_t)(off + tx * 16)] = 0;      /* letterbox: white */
+          tb[(uint16_t)(off + tx * 16 + 1)] = 0;
+        }
+      } else {
+        const volatile __far uint8_t *ra =
+          (const volatile __far uint8_t *)(0x7E0000ul + 0x1A700ul + (uint32_t)(orow * 2) * 64u);
+        const volatile __far uint8_t *rb = ra + 64;
+        for (tx = 0; tx < TW; tx++) {
+          uint16_t i2 = (uint16_t)(tx * 2);
+          uint16_t sL = (uint16_t)(ZPC[ra[i2]] + ZPC[rb[i2]]);
+          uint16_t sR = (uint16_t)(ZPC[ra[i2 + 1]] + ZPC[rb[i2 + 1]]);
+          tb[(uint16_t)(off + tx * 16)] = (uint8_t)
+            ((ZP0[sL >> 8] << 6) | (ZP0[sL & 0xFF] << 4) |
+             (ZP0[sR >> 8] << 2) |  ZP0[sR & 0xFF]);
+          tb[(uint16_t)(off + tx * 16 + 1)] = (uint8_t)
+            ((ZP1[sL >> 8] << 6) | (ZP1[sL & 0xFF] << 4) |
+             (ZP1[sR >> 8] << 2) |  ZP1[sR & 0xFF]);
+        }
+      }
+    }
+  }
+}
+
+/* Leaving zoom: the 1:1 renderer only writes plane 0 (stride 16), so the
+** grays' plane-1 bits would linger — clear them once. */
+static void clear_plane1(void){
+  uint16_t i;
+  for (i = 0; i < 8192u; i += 2) TB0[i + 1] = 0;
+  for (i = 0; i < TILEBYTES - 8192u; i += 2) TB1[i + 1] = 0;
+}
+
 static void refresh(void){
-  tile_pan_xb = (uint16_t)panXb;
-  tile_pan_y  = (uint16_t)panY;
-  tile_rows();                          /* asm: fb -> tile buffer, ~1 ms */
+  if (zoom) {
+    refresh_zoom();
+  } else {
+    tile_pan_xb = (uint16_t)panXb;
+    tile_pan_y  = (uint16_t)panY;
+    tile_rows();                        /* asm: fb -> tile buffer, ~1 ms */
+  }
   REG8(0x2100) = 0x8F;                  /* blank just for the VRAM DMA */
   blit_tiles();
   REG8(0x2100) = 0x0F;                  /* screen on */
@@ -91,7 +149,15 @@ static void refresh(void){
 ** button changed). */
 static int handle_input(void){
   uint16_t p = REG16(0x4218);          /* JOY1: B Y Sel St U D L R | A X L R .... */
-  if (p & 0x0020u) {                   /* L held -> PAN */
+  uint8_t rr = (p & 0x0010u) ? 1 : 0;  /* R shoulder: toggle the zoomed view */
+  if (rr && !r_prev) {
+    r_prev = rr;
+    zoom ^= 1;
+    if (!zoom) clear_plane1();         /* grays out, 1-bit view back */
+    return 1;                          /* redraw in the new mode */
+  }
+  r_prev = rr;
+  if (!zoom && (p & 0x0020u)) {        /* L held -> PAN (zoom shows it all) */
     int ox = panXb, oy = panY;
     if (p & 0x0200u) panXb--;          /* Left */
     if (p & 0x0100u) panXb++;          /* Right */
@@ -127,8 +193,10 @@ static void video_init(void){
   REG8(0x2107) = 0x00;                  /* BG1SC tilemap word $0000, 32x32 */
   REG8(0x210B) = 0x01;                  /* BG1 char base word $1000 */
   REG8(0x2121) = 0;                     /* CGRAM colour 0 = white, 1 = black */
-  REG8(0x2122) = 0xFF; REG8(0x2122) = 0x7F;
-  REG8(0x2122) = 0x00; REG8(0x2122) = 0x00;
+  REG8(0x2122) = 0xFF; REG8(0x2122) = 0x7F;   /* 0: white */
+  REG8(0x2122) = 0x00; REG8(0x2122) = 0x00;   /* 1: black */
+  REG8(0x2122) = 0xF7; REG8(0x2122) = 0x5E;   /* 2: light gray (zoom) */
+  REG8(0x2122) = 0x8C; REG8(0x2122) = 0x31;   /* 3: dark gray  (zoom) */
   REG8(0x2115) = 0x80; REG16(0x2116) = 0x0000;          /* identity tilemap */
   for (i = 0; i < 1024; i++) REG16(0x2118) = (i < n) ? i : 0;
   REG8(0x210D) = 0; REG8(0x210D) = 0;
