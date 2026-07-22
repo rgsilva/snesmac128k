@@ -88,6 +88,11 @@ class Emit:
     def mulu(self, src, dst):        self.w(0xC0C0 | dst << 9 | src); self.n()
     def divu(self, src, dst):        self.w(0x80C0 | dst << 9 | src); self.n()
     def stop(self, imm):             self.w(0x4E72, imm); self.n()
+    def rte(self):                   self.w(0x4E73); self.n()
+    def aline(self, op):             self.w(0xA000 | (op & 0xFFF)); self.n()
+    def addq_l_sp2(self):            self.w(0x54AF, 0x0002); self.n()  # ADDQ.L #2,2(A7)
+    def move_l_imm_absl(self, imm, addr):
+        self.w(0x23FC, imm >> 16, imm, addr >> 16, addr); self.n()
 
     def label(self):                 return self.here()
 
@@ -191,6 +196,21 @@ def build():
     for dn in (1, 2, 3, 4, 5):             # fold the registers in
         a.eor_l_d_d(dn, 7); a.rol_l_imm(1, 7)
     a.move_l_d_absl(7, CRC_L)
+
+    # A-line traps: the hottest special case in a real boot (every OS/Toolbox
+    # call). $A123 is declined by the .Sony HLE hook -> line-A exception ->
+    # our handler bumps the stacked PC past the trap word and RTEs. Runs
+    # AFTER the CRC so the golden value is untouched by the stack traffic.
+    a.mark(11, "trap")
+    handler = a.here() + 2                 # the RTE island right after the BRA
+    a.bra_s(handler + 6)                   # skip it (ADDQ+ext+RTE = 6 bytes)
+    a.addq_l_sp2()                         # 68000 pushes the A-line's own PC:
+    a.rte()                                #   step past it, return
+    assert a.here() == handler + 6
+    a.move_l_imm_absl(handler, 0x28)       # vector 10 (line A) at $28
+    a.loop(16, lambda: [a.aline(0x123) for _ in range(4)], 12)
+    a.n(6)                                 # ledger: handler runs (2x) per A-line
+                                           # (emit-time counted once; see loop())
 
     a.phase = "done"
     a.move_w_imm_absl(DONE, PHASE_W)

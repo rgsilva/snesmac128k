@@ -204,6 +204,8 @@ void m68k_write16(uint32_t a, uint16_t v){ bus_write(a, (uint8_t)(v >> 8)); bus_
 void m68k_write32(uint32_t a, uint32_t v){
   bus_write(a, (uint8_t)(v >> 24)); bus_write(a+1, (uint8_t)(v >> 16)); bus_write(a+2, (uint8_t)(v >> 8)); bus_write(a+3, (uint8_t)v); }
 
+static int sony_trap(uint16_t op);                /* the m68k A-line hook, below */
+
 void mac_init(const uint8_t *rom_){
 #ifdef MAC_SNES
   (void)rom_;                                     /* ROM is fixed in cart, via mac_rom_rd */
@@ -212,6 +214,7 @@ void mac_init(const uint8_t *rom_){
   rom = rom_;
   memset(ram, 0, sizeof ram);
 #endif
+  m68k_aline_hook = sony_trap;                    /* HLE OS traps, fetched once */
   overlay = 1;
   via_orb = via_ora = via_ddrb = via_ddra = 0;
   via_ifr = via_ier = via_acr = via_pcr = via_sr = 0;
@@ -249,12 +252,12 @@ void mac_set_mouse(int x, int y, int btn){
   mouse_btn = btn;
 }
 
-static int sony_trap(void){
-  uint16_t op;
+/* A-line hook (m68k_aline_hook): called after the fetch, PC already past the
+** trap word — no second per-step opcode read (docs/PERF.md item A). */
+static int sony_trap(uint16_t op){
   int tnum, refnum;
   uint32_t pb;
   if (!disk_size) return 0;
-  op = m68k_read16(m68kc.pc);
   if ((op & 0xF800u) != 0xA000u) return 0;       /* not an OS (Device Manager) trap */
   tnum = op & 0xFF;
   if (tnum < 0x02 || tnum > 0x06) return 0;       /* Read/Write/Control/Status/KillIO only */
@@ -308,19 +311,19 @@ static int sony_trap(void){
     uint32_t iocompl = m68k_read32(pb + 0x0C);
     if (iocompl) {
       m68kc.a[7] -= 4;
-      m68k_write32(m68kc.a[7], m68kc.pc + 2);     /* completion RTS -> past trap */
+      m68k_write32(m68kc.a[7], m68kc.pc);         /* completion RTS -> past trap */
       m68kc.a[0] = pb;                            /* completion arg: A0 = pb */
       m68kc.pc = iocompl;
       return 1;
     }
   }
-  /* Synchronous request: caller continues inline past the trap word. */
-  m68kc.pc += 2;
+  /* Synchronous request: caller continues inline past the trap word (the
+  ** fetch already advanced PC). */
   return 1;
 }
 
 void mac_step(void){
-  if (!sony_trap()) m68k_step();
+  m68k_step();
   via_t1 = (uint16_t)(via_t1 - 1);   /* rough timer motion so poll loops progress */
   via_t2 = (uint16_t)(via_t2 - 1);
   if (--vbl_timer == 0) {

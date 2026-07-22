@@ -137,6 +137,7 @@ static uint32_t src_read(int mode, int reg, int size){
 
 /* ---- exceptions (group 1/2, 6-byte frame) ---- */
 static uint32_t g_start_pc;   /* pc at the start of the current instruction */
+int (*m68k_aline_hook)(uint16_t op) = 0;
 static void exception(int vec, uint32_t push_pc){
   uint16_t oldsr = m68kc.sr;
   m68k_set_sr((uint16_t)((m68kc.sr | SR_S) & ~SR_T));
@@ -639,7 +640,9 @@ void m68k_step(void){
     }
     case 0x8: if (((op >> 4) & 0x1F) == 0x10 && ((op >> 6) & 3) == 0) op_bcd(op, 1); else op_alu_std(op, 0x8); break;
     case 0x9: op_alu_std(op, 0x9); break;
-    case 0xA: exception(EXC_LINEA, g_start_pc); break;
+    case 0xA:
+      if (!m68k_aline_hook || !m68k_aline_hook(op)) exception(EXC_LINEA, g_start_pc);
+      break;
     case 0xB: op_alu_std(op, 0xB); break;
     case 0xC:
       if (((op >> 4) & 0x1F) == 0x10 && ((op >> 6) & 3) == 0) { op_bcd(op, 0); break; }

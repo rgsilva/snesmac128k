@@ -35,6 +35,12 @@ extern void     m68k_write32(uint32_t addr, uint32_t v);
 void m68k_set_sr(uint16_t val);  /* write SR with correct A7 bank swap */
 void m68k_step(void);            /* execute one instruction / take a pending trap */
 
+/* Optional A-line (0xAxxx opcode) intercept, called AFTER the opcode fetch
+** (PC is already past the trap word). Return nonzero if handled; zero falls
+** through to the normal line-A exception. Lets the embedder HLE OS traps
+** without a second per-step opcode fetch (docs/PERF.md item A). */
+extern int (*m68k_aline_hook)(uint16_t op);
+
 /* SR / CCR bits */
 #define SR_C 0x0001u
 #define SR_V 0x0002u
