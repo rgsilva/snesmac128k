@@ -7,6 +7,7 @@
 static uint8_t g[0x10000];
 uint8_t  m68k_read8(uint32_t a){ return g[a & 0xFFFF]; }
 uint16_t m68k_read16(uint32_t a){ a &= 0xFFFF; return ((uint16_t)g[a] << 8) | g[(a + 1) & 0xFFFF]; }
+uint16_t m68k_fetch16(uint32_t a){ return m68k_read16(a); }
 uint32_t m68k_read32(uint32_t a){ a &= 0xFFFF;
   return ((uint32_t)g[a] << 24) | ((uint32_t)g[(a+1)&0xFFFF] << 16) | ((uint32_t)g[(a+2)&0xFFFF] << 8) | g[(a+3)&0xFFFF]; }
 void m68k_write8(uint32_t a, uint8_t v){ g[a & 0xFFFF] = v; }

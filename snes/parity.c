@@ -12,6 +12,7 @@
 static uint8_t *const M68 = (uint8_t *)0x7F0000ul;   /* 68000 memory = WRAM $7F */
 uint8_t  m68k_read8(uint32_t a){ return M68[a & 0xFFFF]; }
 uint16_t m68k_read16(uint32_t a){ a &= 0xFFFF; return ((uint16_t)M68[a] << 8) | M68[(a + 1) & 0xFFFF]; }
+uint16_t m68k_fetch16(uint32_t a){ return m68k_read16(a); }
 uint32_t m68k_read32(uint32_t a){ a &= 0xFFFF;
   return ((uint32_t)M68[a] << 24) | ((uint32_t)M68[(a+1)&0xFFFF] << 16) | ((uint32_t)M68[(a+2)&0xFFFF] << 8) | M68[(a+3)&0xFFFF]; }
 void m68k_write8(uint32_t a, uint8_t v){ M68[a & 0xFFFF] = v; }

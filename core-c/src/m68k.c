@@ -10,8 +10,8 @@ m68k_t m68kc;
 static const uint32_t MASKSZ[5] = {0, 0xFFu, 0xFFFFu, 0, 0xFFFFFFFFu};
 static const uint32_t MSBSZ[5]  = {0, 0x80u, 0x8000u, 0, 0x80000000u};
 
-static uint16_t fetch16(void){ uint16_t w = m68k_read16(m68kc.pc); m68kc.pc += 2; return w; }
-static uint32_t fetch32(void){ uint32_t l = m68k_read32(m68kc.pc); m68kc.pc += 4; return l; }
+static uint16_t fetch16(void){ uint16_t w = m68k_fetch16(m68kc.pc); m68kc.pc += 2; return w; }
+static uint32_t fetch32(void){ uint32_t l = (uint32_t)fetch16() << 16; return l | fetch16(); }
 
 /* Explicit sign-extend of the low 8 bits to 32. Calypsi miscompiles the
 ** (int8_t) cast of a value with bit 7 set (16->8->32 truncation+extend), which

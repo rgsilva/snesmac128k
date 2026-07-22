@@ -26,6 +26,9 @@ extern m68k_t m68kc;
 
 /* big-endian memory interface, provided by the embedder (24-bit address bus) */
 extern uint8_t  m68k_read8(uint32_t addr);
+/* instruction-fetch word read: same value as m68k_read16, but the embedder
+** may serve it from a cached window pointer (docs/PERF.md item F) */
+extern uint16_t m68k_fetch16(uint32_t addr);
 extern uint16_t m68k_read16(uint32_t addr);
 extern uint32_t m68k_read32(uint32_t addr);
 extern void     m68k_write8(uint32_t addr, uint8_t v);

@@ -15,6 +15,7 @@ static void wlog(uint32_t a){ if (g_wn < 256) g_wlog[g_wn++] = a & MASK; }
 
 uint8_t  m68k_read8(uint32_t a){ return g_mem[a & MASK]; }
 uint16_t m68k_read16(uint32_t a){ a &= MASK; return ((uint16_t)g_mem[a] << 8) | g_mem[(a + 1) & MASK]; }
+uint16_t m68k_fetch16(uint32_t a){ return m68k_read16(a); }
 uint32_t m68k_read32(uint32_t a){ a &= MASK;
   return ((uint32_t)g_mem[a] << 24) | ((uint32_t)g_mem[(a+1)&MASK] << 16) | ((uint32_t)g_mem[(a+2)&MASK] << 8) | g_mem[(a+3)&MASK]; }
 void m68k_write8(uint32_t a, uint8_t v){ a &= MASK; g_mem[a] = v; wlog(a); }

@@ -11,21 +11,24 @@
 ** SRAM and ROM/disk in cart ROM, reached through accessor functions the SNES
 ** main provides (mac_snesmem.c). Everything else in this file is identical. */
 #ifdef MAC_SNES
-uint8_t mac_ram_rd(uint32_t a);
-void    mac_ram_wr(uint32_t a, uint8_t v);
-uint8_t mac_rom_rd(uint32_t a);
-uint8_t mac_disk_rd(uint32_t a);
-#  define RAM_RD(a)     mac_ram_rd(a)
-#  define RAM_WR(a, v)  mac_ram_wr((a), (v))
-#  define ROM_RD(a)     mac_rom_rd(a)
-#  define DISK_RD(a)    mac_disk_rd(a)
+#  include "macmem.h"                      /* static-inline accessors, no jsl */
+#  define RAM_RD(a)      mac_ram_rd(a)
+#  define RAM_WR(a, v)   mac_ram_wr((a), (v))
+#  define ROM_RD(a)      mac_rom_rd(a)
+#  define DISK_RD(a)     mac_disk_rd(a)
+#  define RAM_RD16(a)    mac_ram_rd16(a)
+#  define RAM_WR16(a, v) mac_ram_wr16((a), (v))
+#  define ROM_RD16(a)    mac_rom_rd16(a)
 #else
 static uint8_t        ram[MAC_RAM_SIZE];
 static const uint8_t *rom;                 /* 64 KB */
-#  define RAM_RD(a)     ram[a]
-#  define RAM_WR(a, v)  (ram[a] = (v))
-#  define ROM_RD(a)     rom[a]
-#  define DISK_RD(a)    disk_data[a]
+#  define RAM_RD(a)      ram[a]
+#  define RAM_WR(a, v)   (ram[a] = (v))
+#  define ROM_RD(a)      rom[a]
+#  define DISK_RD(a)     disk_data[a]
+#  define RAM_RD16(a)    ((uint16_t)(((uint16_t)ram[a] << 8) | ram[(a) + 1]))
+#  define RAM_WR16(a, v) (ram[a] = (uint8_t)((v) >> 8), ram[(a) + 1] = (uint8_t)(v))
+#  define ROM_RD16(a)    ((uint16_t)(((uint16_t)rom[a] << 8) | rom[(a) + 1]))
 #endif
 static int            overlay;             /* 1 at reset: ROM at $0 */
 static uint32_t       vbl_count;
@@ -63,6 +66,8 @@ static void via_update_irq(void){
   m68kc.irq = (via_ifr & via_ier & 0x7F) ? 1 : 0;
 }
 
+static void mac_fetch_invalidate(void);   /* PC-window fetch cache, below */
+
 /* ---- VIA register access (reg = address bits A9-A12) ---- */
 static uint8_t via_read(uint32_t a){
   int reg = (int)((a >> 9) & 0xF);
@@ -90,7 +95,10 @@ static void via_write(uint32_t a, uint8_t v){
     case 0:  via_orb = v; break;
     case 1:  case 15:                       /* ORA — bit 4 is the ROM overlay */
              via_ora = v;
-             if ((via_ddra & 0x10) && !(v & 0x10)) overlay = 0;   /* driven low => overlay off */
+             if ((via_ddra & 0x10) && !(v & 0x10)) {
+               overlay = 0;                       /* driven low => overlay off */
+               mac_fetch_invalidate();            /* the PC window map changed */
+             }
              break;
     case 2:  via_ddrb = v; break;
     case 3:  via_ddra = v; break;
@@ -196,13 +204,76 @@ static void bus_write(uint32_t a, uint8_t v){
 
 /* ---- m68k memory interface (big-endian) ---- */
 uint8_t  m68k_read8(uint32_t a){ return bus_read(a); }
-uint16_t m68k_read16(uint32_t a){ return (uint16_t)((bus_read(a) << 8) | bus_read(a + 1)); }
+
+/* Word ops (docs/PERF.md item D): an even-aligned word never straddles an
+** 8 KB window, so the RAM/ROM fast paths do ONE range decode + ONE window
+** computation for both bytes. Odd, I/O and edge addresses fall through to
+** the byte-wise path, which behaves exactly as before. */
+uint16_t m68k_read16(uint32_t a){
+  a &= 0xFFFFFF;
+  if (!(a & 1)) {
+    if (a < 0x400000) {
+      if (!overlay) return RAM_RD16(a & 0x1FFFF);
+      return ROM_RD16(a & 0xFFFF);
+    }
+    if (a < 0x500000) return ROM_RD16(a & 0xFFFF);
+    if (a >= 0x600000 && a < 0x800000 && overlay) return RAM_RD16(a & 0x1FFFF);
+  }
+  return (uint16_t)((bus_read(a) << 8) | bus_read(a + 1));
+}
 uint32_t m68k_read32(uint32_t a){
-  return ((uint32_t)bus_read(a) << 24) | ((uint32_t)bus_read(a+1) << 16) | ((uint32_t)bus_read(a+2) << 8) | bus_read(a+3); }
+  return ((uint32_t)m68k_read16(a) << 16) | m68k_read16(a + 2); }
 void m68k_write8(uint32_t a, uint8_t v){ bus_write(a, v); }
-void m68k_write16(uint32_t a, uint16_t v){ bus_write(a, (uint8_t)(v >> 8)); bus_write(a + 1, (uint8_t)v); }
+void m68k_write16(uint32_t a, uint16_t v){
+  a &= 0xFFFFFF;
+  if (!(a & 1)) {
+    if (a < 0x400000) { if (!overlay) { RAM_WR16(a & 0x1FFFF, v); return; } }
+    else if (a >= 0x600000 && a < 0x800000) { if (overlay) { RAM_WR16(a & 0x1FFFF, v); return; } }
+  }
+  bus_write(a, (uint8_t)(v >> 8)); bus_write(a + 1, (uint8_t)v);
+}
 void m68k_write32(uint32_t a, uint32_t v){
-  bus_write(a, (uint8_t)(v >> 24)); bus_write(a+1, (uint8_t)(v >> 16)); bus_write(a+2, (uint8_t)(v >> 8)); bus_write(a+3, (uint8_t)v); }
+  m68k_write16(a, (uint16_t)(v >> 16)); m68k_write16(a + 2, (uint16_t)v); }
+
+/* ---- PC-window fetch cache (docs/PERF.md item F) ----------------------
+** Execution is sequential: nearly every fetch lands in the same 8 KB block
+** as the last one. Cache the resolved SNES far pointer for that block and
+** serve fetches with a tag compare + two indexed reads, skipping the bus
+** decode and window math. The tag is the PC's block address; the only event
+** that changes the ADDRESS MAP is the overlay flip (invalidated above) —
+** RAM writes need nothing, the cached pointer aliases the same storage
+** (self-modifying code stays coherent). On the host the plain bus is fast
+** enough: fetch = read16. */
+#ifdef MAC_SNES
+#define FETCH_TAG_INVALID 0xFFFFFFFFul
+static uint32_t fetch_tag = FETCH_TAG_INVALID;    /* pc & 0xFFFFE000 of the block */
+static const volatile __far uint8_t *fetch_base;  /* -> block byte 0 */
+static void mac_fetch_invalidate(void){ fetch_tag = FETCH_TAG_INVALID; }
+uint16_t m68k_fetch16(uint32_t pc){
+  uint32_t tag = pc & 0xFFFFE000ul;
+  uint16_t off = (uint16_t)(pc & 0x1FFFu);
+  if (tag != fetch_tag) {
+    uint32_t a = pc & 0xFFFFFFul;
+    if (a < 0x400000ul) {
+      if (!overlay)
+        fetch_base = (const volatile __far uint8_t *)MAC_SRAM(a & 0x1E000ul);
+      else
+        fetch_base = (const volatile __far uint8_t *)(0xC80000ul + (a & 0xE000ul));
+    } else if (a < 0x500000ul) {
+      fetch_base = (const volatile __far uint8_t *)(0xC80000ul + (a & 0xE000ul));
+    } else if (a >= 0x600000ul && a < 0x800000ul && overlay) {
+      fetch_base = (const volatile __far uint8_t *)MAC_SRAM(a & 0x1E000ul);
+    } else {
+      return m68k_read16(pc);                     /* PC in I/O space: don't cache */
+    }
+    fetch_tag = tag;
+  }
+  return (uint16_t)(((uint16_t)fetch_base[off] << 8) | fetch_base[off + 1]);
+}
+#else
+static void mac_fetch_invalidate(void){}
+uint16_t m68k_fetch16(uint32_t pc){ return m68k_read16(pc); }
+#endif
 
 static int sony_trap(uint16_t op);                /* the m68k A-line hook, below */
 
@@ -215,6 +286,7 @@ void mac_init(const uint8_t *rom_){
   memset(ram, 0, sizeof ram);
 #endif
   m68k_aline_hook = sony_trap;                    /* HLE OS traps, fetched once */
+  mac_fetch_invalidate();                         /* re-init flips overlay back on */
   overlay = 1;
   via_orb = via_ora = via_ddrb = via_ddra = 0;
   via_ifr = via_ier = via_acr = via_pcr = via_sr = 0;
