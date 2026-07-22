@@ -46,8 +46,19 @@ extern void tile_rows(void);
 extern uint16_t tile_pan_xb, tile_pan_y;
 
 #include "maczoom_tab.h"              /* ZPC/ZP0/ZP1: 2x2->4-gray tables */
+#include "mackbd_tab.h"               /* KBD_FONT/MAP/GRID/KEYS: on-screen kbd */
 static uint8_t zoom;                  /* 0 = 1:1 pan view, 1 = whole screen */
 static uint8_t r_prev;                /* R edge detect for the toggle */
+
+/* On-screen keyboard (SELECT toggles, like emu8086). It's BG2 over the bottom
+** five tile rows: d-pad picks a key, A presses it (posts a real keyDown via
+** mac_post_key -> the ROM's Event Manager). BG2 tiles live at VRAM word $3000
+** (char base 3), its tilemap at $0400; Mode-0 puts BG2 on CGRAM colours 32+,
+** so the panel/highlight palettes don't touch the Mac view's black & white. */
+#define KBD_ROW0   23                 /* top keyboard row -> screen tile row 23 */
+static uint8_t kbd_vis, ksel, kshift; /* visible? / selected key / sticky shift */
+static uint8_t sel_prev, ka_prev;     /* SELECT / A edge detect */
+static uint16_t kd_prev, nav_hold;    /* d-pad edge + autorepeat countdown */
 
 /* The visible window into the Mac screen. panXb is the left edge in framebuffer
 ** BYTES (x8 = pixels), 0..32; panY is the top edge in pixel rows, 0..118 — the
@@ -146,13 +157,94 @@ static void refresh(void){
   REG8(0x2100) = 0x0F;                  /* screen on */
 }
 
+/* Write BG2's tilemap rows for the keyboard, highlighting the selected key
+** (palette 1 = inverted). 5 rows x 32 cols at tilemap $0400, rows 23-27. */
+static void kbd_draw(void){
+  uint16_t r, c;
+  REG8(0x2100) = 0x8F;                  /* force blank: VRAM is writable only in
+                                        ** blank, else the PPU drops the writes */
+  for (r = 0; r < 5; r++) {
+    REG8(0x2115) = 0x80;
+    REG16(0x2116) = (uint16_t)(0x0400 + (KBD_ROW0 + r) * 32);
+    for (c = 0; c < 32; c++) {
+      uint16_t t = KBD_MAP[r][c];
+      if (KBD_GRID[r][c] == ksel) t += KBD_HILITE;   /* selected -> inverted tile */
+      REG16(0x2118) = t;
+    }
+  }
+  REG8(0x2100) = 0x0F;                  /* screen on */
+}
+
+/* Center column of a key, for up/down navigation. */
+static int kbd_cx(uint8_t k){ return KBD_KEYS[k].x + KBD_KEYS[k].w / 2; }
+
+/* Move the selection by a d-pad direction (bit set in d). */
+static void kbd_nav(uint16_t d){
+  uint8_t r = KBD_KEYS[ksel].row, best = ksel, i;
+  if (d & 0x0200u) {                   /* Left: nearest key left, same row */
+    int bx = -1;
+    for (i = 0; i < KBD_NKEYS; i++)
+      if (KBD_KEYS[i].row == r && KBD_KEYS[i].x < KBD_KEYS[ksel].x &&
+          (int)KBD_KEYS[i].x > bx) { bx = KBD_KEYS[i].x; best = i; }
+  } else if (d & 0x0100u) {            /* Right */
+    int bx = 0x7FFF;
+    for (i = 0; i < KBD_NKEYS; i++)
+      if (KBD_KEYS[i].row == r && KBD_KEYS[i].x > KBD_KEYS[ksel].x &&
+          KBD_KEYS[i].x < bx) { bx = KBD_KEYS[i].x; best = i; }
+  } else {                             /* Up / Down: nearest column in next row */
+    int tr = (d & 0x0800u) ? (int)r - 1 : (int)r + 1;
+    int cx = kbd_cx(ksel), bd = 0x7FFF;
+    if (tr < 0) tr = 4; else if (tr > 4) tr = 0;
+    for (i = 0; i < KBD_NKEYS; i++)
+      if (KBD_KEYS[i].row == tr) {
+        int dd = kbd_cx(i) - cx; if (dd < 0) dd = -dd;
+        if (dd < bd) { bd = dd; best = i; }
+      }
+  }
+  ksel = best;
+}
+
+/* Press the selected key: SHIFT toggles sticky shift, anything else posts a
+** keyDown with the shifted or plain character (then clears a one-shot shift). */
+static void kbd_press(void){
+  uint8_t ch = KBD_KEYS[ksel].ch;
+  if (ch == 0xFF) { kshift ^= 1; kbd_draw(); return; }   /* SHIFT */
+  mac_post_key(KBD_KEYS[ksel].kc, kshift ? KBD_KEYS[ksel].sh : ch);
+  if (kshift) { kshift = 0; }
+}
+
 /* Poll the auto-read joypad. Two modes: hold L and the d-pad PANS the window
 ** (8px horiz / 4px vert); with L up the d-pad moves the MOUSE and A clicks.
 ** Returns 1 if the display should be redrawn now (view moved, or the cursor /
 ** button changed). */
 static int handle_input(void){
   uint16_t p = REG16(0x4218);          /* JOY1: B Y Sel St U D L R | A X L R .... */
+  uint8_t sel = (p & 0x2000u) ? 1 : 0; /* SELECT: toggle the on-screen keyboard */
   uint8_t rr = (p & 0x0010u) ? 1 : 0;  /* R shoulder: toggle the zoomed view */
+
+  if (sel && !sel_prev) {              /* SELECT edge: show/hide the keyboard */
+    sel_prev = sel;
+    kbd_vis ^= 1;
+    if (kbd_vis) kbd_draw();
+    REG8(0x212C) = kbd_vis ? 0x03 : 0x01;   /* main screen: BG1 (+BG2 when up) */
+    return 0;                          /* BG2 is independent of the tile blit */
+  }
+  sel_prev = sel;
+
+  if (kbd_vis) {                        /* keyboard mode: d-pad navigates, A types */
+    uint8_t a = (p & 0x0080u) ? 1 : 0;
+    uint16_t d = p & 0x0F00u;           /* d-pad bits */
+    uint16_t fresh = (uint16_t)(d & ~kd_prev);   /* newly-pressed directions */
+    kd_prev = d;
+    if (a && !ka_prev) kbd_press();     /* A edge -> press the selected key */
+    ka_prev = a;
+    /* Move on a fresh press; while held, autorepeat on a coarse countdown
+    ** (input is polled many times per frame, so the count is large). */
+    if (fresh) { kbd_nav(fresh); kbd_draw(); nav_hold = 2000; }
+    else if (d) { if (nav_hold) nav_hold--; else { kbd_nav(d); kbd_draw(); nav_hold = 600; } }
+    else nav_hold = 0;
+    return 0;
+  }
   if (rr && !r_prev) {
     r_prev = rr;
     zoom ^= 1;
@@ -205,12 +297,22 @@ static void video_init(void){
   REG8(0x2100) = 0x8F;                  /* force blank */
   REG8(0x2105) = 0x00;                  /* BGMODE 0 */
   REG8(0x2107) = 0x00;                  /* BG1SC tilemap word $0000, 32x32 */
-  REG8(0x210B) = 0x01;                  /* BG1 char base word $1000 */
+  REG8(0x2108) = 0x04;                  /* BG2SC tilemap word $0400, 32x32 */
+  REG8(0x210B) = 0x31;                  /* char base: BG1 word $1000, BG2 $3000 */
+  REG8(0x2110) = 0; REG8(0x2110) = 0;   /* BG2 scroll 0 */
   REG8(0x2121) = 0;                     /* CGRAM colour 0 = white, 1 = black */
   REG8(0x2122) = 0xFF; REG8(0x2122) = 0x7F;   /* 0: white */
   REG8(0x2122) = 0x00; REG8(0x2122) = 0x00;   /* 1: black */
   REG8(0x2122) = 0xF7; REG8(0x2122) = 0x5E;   /* 2: light gray (zoom) */
   REG8(0x2122) = 0x8C; REG8(0x2122) = 0x31;   /* 3: dark gray  (zoom) */
+  /* BG2 palette (Mode 0 offsets BG2 to CGRAM colour 32). Keyboard tiles use
+  ** value 2 = panel, 3 = ink; palette 0 = white key / black text, palette 1
+  ** (colour 36+) = the inverted highlight for the selected key. */
+  REG8(0x2121) = 34;
+  REG8(0x2122) = 0x00; REG8(0x2122) = 0x00;   /* 34: black key panel */
+  REG8(0x2122) = 0xFF; REG8(0x2122) = 0x7F;   /* 35: white ink       */
+  /* highlight is done with inverted tiles (KBD_HILITE), not a palette swap:
+  ** BG2 ignores the tilemap palette bits in Mode 0 (verified in Mesen). */
   REG8(0x2115) = 0x80; REG16(0x2116) = 0x0000;          /* identity tilemap */
   for (i = 0; i < 1024; i++) REG16(0x2118) = (i < n) ? i : 0;
   REG8(0x210D) = 0; REG8(0x210D) = 0;
@@ -218,6 +320,14 @@ static void video_init(void){
   REG8(0x212C) = 0x01;                  /* main screen: BG1 */
   for (i = 0; i < 8192u; i++) TB0[i] = 0;               /* plane1 stays 0 forever */
   for (i = 0; i < TILEBYTES - 8192u; i++) TB1[i] = 0;
+
+  /* Upload the keyboard font tiles to VRAM word $3000 (BG2 char base) and
+  ** clear its tilemap ($0400) to the transparent tile 0. */
+  REG8(0x2115) = 0x80; REG16(0x2116) = 0x3000;
+  for (i = 0; i < (uint16_t)(sizeof KBD_FONT / 2); i++)
+    REG16(0x2118) = (uint16_t)(KBD_FONT[i * 2] | (KBD_FONT[i * 2 + 1] << 8));
+  REG16(0x2116) = 0x0400;
+  for (i = 0; i < 1024; i++) REG16(0x2118) = 0;
 }
 
 int main(void){

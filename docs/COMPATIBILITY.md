@@ -38,14 +38,15 @@ editor and all:
 
 ## What doesn't (yet)
 
-- **Mouse works; no keyboard yet.** The **d-pad** moves the cursor, a tap of **A**
+- **Mouse and keyboard both work.** The **d-pad** moves the cursor, a tap of **A**
   clicks (the press is stretched internally so the Mac's VBL-rate button sampling
-  can't miss it), holding **A** holds the button for menu pulls and drags. Menus
-  and desk accessories verified working on the SNES (see the Control Panel above).
-  The cursor still lags a little — the Mac redraws it only on its VBL — but far
-  less than it used to: redraws are ~13× cheaper and the machine ~6× faster since
-  the first boots (see [PERF.md](PERF.md)). The **keyboard** isn't wired up yet,
-  so no typing; that's next (see [FUTURE.md](FUTURE.md)).
+  can't miss it), holding **A** holds the button for menu pulls and drags. **SELECT**
+  brings up an on-screen QWERTY keyboard along the bottom — d-pad to pick a key, **A**
+  to press, a **SHIFT** key for the shifted set — and the keystrokes reach the ROM's
+  Event Manager, so you can rename icons, drive desk accessories, and type in
+  applications. (Both are a little laggy — the Mac only redraws the cursor on its
+  VBL — but far less than at first: redraws are ~13× cheaper and the machine ~6×
+  faster now; see [PERF.md](PERF.md).)
 - **Two drives, read-only.** The internal drive serves the 400 KB System floppy from
   the cartridge; drop a second 400 KB image at `roms/disk2_data.bin` and it appears in
   the **external drive** — a second volume on the desktop (an apps disk, say — MacPaint

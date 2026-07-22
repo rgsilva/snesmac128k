@@ -38,9 +38,12 @@ cycles-per-instruction number. The levers, smallest to biggest:
   so menus pull down and the Finder responds. Still to do: smooth it out (the cursor
   redraws only on the Mac's VBL, so it lags on the slow CPU), and maybe support a real
   SNES Mouse peripheral.
-- **Keyboard** — an on-screen **virtual keyboard**, snes86-style: **SELECT** opens/closes
-  it, **A** confirms the highlighted key, keystrokes feed the Mac keyboard. This is the
-  remaining half of M6.
+- **On-screen keyboard — done.** **SELECT** shows/hides a QWERTY keyboard across
+  the bottom five rows (BG2 overlay); the **d-pad** moves the highlight, **A**
+  presses, and a **SHIFT** key gives the shifted characters. Keys post real
+  keyDown events into the ROM's Event Manager (an HLE that piggybacks
+  `_PostEvent` when the guest polls for events), so menus, the Finder's rename,
+  and desk accessories all receive them.
 
 ## Make it fit the screen (display)
 

@@ -11,7 +11,8 @@ no expansion hardware, just a Super Nintendo (and a lot of patience).
 
 <p align="center">
   <img src="docs/assets/macboot_003.png" width="420" alt="The Apple menu, opened with a SNES controller"><br>
-  <sub>The 🍎 menu, opened on a Super Nintendo — the d-pad moves the mouse, A clicks.</sub>
+  <sub>The 🍎 menu, opened on a Super Nintendo — d-pad moves the mouse, A clicks,
+  SELECT brings up an on-screen keyboard.</sub>
 </p>
 
 <p align="center">

@@ -370,6 +370,22 @@ void mac_set_disk(const uint8_t *data, uint32_t size){ disk_data = data; disk_si
 void mac_set_disk2(const uint8_t *data, uint32_t size){ disk2_data = data; disk2_size = size; }
 void (*mac_sony_hook)(int tnum, uint32_t pos, uint32_t cnt) = 0;   /* host debugging */
 
+/* HLE the keyboard: rather than emulate the M0110's VIA shift-register serial
+** protocol, post keyDown events with the ROM's own _PostEvent. The trick is
+** WHEN: the A-line hook fires for every trap, so when the guest is about to
+** execute an event-polling trap (_GetNextEvent A970 / _EventAvail A971 /
+** _GetOSEvent A031 / _OSEventAvail A030) and a key is pending, we push the
+** poll's own address as the return, load A0=keyDown(3) / D0=(keycode<<8|char),
+** and jump into _PostEvent via the OS trap table ($0400 + 4*0x2F). PostEvent
+** returns straight into re-executing the poll, which then FINDS the event.
+** Register clobbering is safe by construction: D0-D2/A0-A1 are caller-saved
+** at any trap boundary, and the guest was at one. */
+static uint16_t key_pending;             /* (keycode << 8) | char; 0 = none */
+void mac_post_key(uint8_t code, uint8_t ch){
+  if (!key_pending) key_pending = (uint16_t)((code << 8) | ch);
+}
+int mac_key_busy(void){ return key_pending != 0; }
+
 /* HLE the mouse: rather than emulate the quadrature hardware + its interrupts,
 ** write the cursor position straight into the low-memory globals the ROM's VBL
 ** cursor task follows (RawMouse / MTemp, a Point {v,h}) and flag CrsrNew so it
@@ -388,6 +404,23 @@ void mac_set_mouse(int x, int y, int btn){
 static int sony_trap(uint16_t op){
   int tnum, refnum;
   uint32_t pb;
+  if (key_pending &&
+      (op == 0xA970u || op == 0xA971u || op == 0xA030u || op == 0xA031u)) {
+    /* the 64K-ROM trap table is 512 COMPRESSED 16-bit entries at $0400:
+    ** address = ROMBase + entry*2 (verified: _PostEvent = 1BBE -> $40377C) */
+    uint16_t te = m68k_read16(0x0400u + 2u * 0x2Fu);
+    uint32_t pe = 0x400000ul + (uint32_t)((te & 0x7FFFu) << 1);
+    if (!(te & 0x8000u)) {                             /* plain ROM entry */
+      m68kc.a[7] -= 4;
+      m68k_write32(m68kc.a[7], m68kc.pc - 2);          /* return: re-run the poll */
+      m68kc.a[0] = 3;                                  /* A0 = keyDown */
+      m68kc.d[0] = key_pending;                        /* D0 = keycode<<8 | char */
+      m68kc.pc = pe;
+      key_pending = 0;
+      return 1;                                        /* consumed this dispatch */
+    }
+    key_pending = 0;                                   /* no sane vector: drop */
+  }
   if ((op & 0xF800u) != 0xA000u) return 0;       /* not an OS (Device Manager) trap */
 #ifdef MAC_FASTBOOT
   if ((op & 0xFFu) == 0x2Eu) {                    /* _BlockMove (PERF.md item I2):
