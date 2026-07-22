@@ -108,6 +108,7 @@ class Emit:
     def bsr_s(self, target):         # BSR.b — like BRA.b but pushes a return addr
         self.w(0x6100 | ((target - (self.here() + 2)) & 0xFF)); self.n()
     def rts(self):                   self.w(0x4E75); self.n()
+    def jsr_an(self, an):            self.w(0x4E90 | an); self.n()  # JSR (An)
 
     # ---- structured helpers ----
     def mark(self, num, name):       # end phase, start the next
@@ -220,8 +221,12 @@ def build():
     a.rts()                                #      return
     assert a.here() == sub + 6
     for _ in range(32):
-        a.bsr_s(sub)
+        a.bsr_s(sub)                       # BSR punts... no: BSR is native now
     a.n(32 * 3)                            # ledger: each call = 2 folds + the RTS
+    a.movea_l_imm(sub, 0)                  # A0 = the subroutine, then JSR (A0) x16
+    for _ in range(16):
+        a.jsr_an(0)
+    a.n(16 * 3)                            # each JSR call = 2 folds + the RTS
 
     a.mark(10, "crc")
     a.movea_l_imm(0x200, 0)                # 16 longs of the RAM buffer

@@ -18,10 +18,12 @@
 ;;; with N/V/Z/C/X taken from the 65816 ALU (item 5e); and MOVE.W/.L between
 ;;; {Dn,An,(An),(An)+} over the two-region RAM fast path (item 5f — one memory
 ;;; operand, clean RAM only; mem->mem, MOVE.B, ROM/IO, odd, overlay-on and the
-;;; wider addressing modes all punt); and RTS (item 5g — the stack read reuses
-;;; the same RAM fast path). Slow path (pending irq, STOP, fetch-cache miss,
-;;; extension word beyond the cached window): the full C m68k_step / m68k_exec.
-;;; Next candidates: BSR/JSR, byte/word ALU, MOVE.B and ROM-source MOVE, CMPI.
+;;; wider addressing modes all punt); and the subroutine call/return set
+;;; (item 5g) — RTS, BSR.b and JSR (An), the stack read/write reusing the same
+;;; RAM fast path (BSR.w and abs/disp/index JSR punt). Slow path (pending irq,
+;;; STOP, fetch-cache miss, extension word beyond the cached window): the full
+;;; C m68k_step / m68k_exec. Next candidates: byte/word ALU, MOVE.B and
+;;; ROM-source MOVE, CMPI, JSR with a fetched EA.
 ;;;
 ;;; Everything lives in the direct page (item 5a): m68kc (pc +64, sr +76,
 ;;; stopped|irq word +78; sizeof==80 packed, verified), the fetch cache,
@@ -132,13 +134,17 @@ slow:         jsl     long:m68k_step  ; full C step: irq entry / STOP / refill
 
 ;;; ---- native handlers (each an exact mirror of the C semantics) ----
 
-;; 0x4E: NOP (0x4E71) and RTS (0x4E75) native; JSR/RTE/LINK/... punt.
+;; 0x4E: NOP (0x4E71), RTS (0x4E75), JSR (0x4E80-BF) native; RTE/LINK/... punt.
 h_4e:         lda     dp:.tiny cur_op
               cmp     ##0x4e71
               beq     nj1
               cmp     ##0x4e75
               beq     h_rts
+              and     ##0xffc0
+              cmp     ##0x4e80        ; JSR <ea>
+              beq     h4_jsr
               jmp     long:punt
+h4_jsr:       jmp     long:h_jsr
 nj1:          jmp     long:tick
 
 ;; RTS: pc = RD32(A7) (big-endian, two region-checked words), A7 += 4. The
@@ -176,6 +182,96 @@ h_rts:        lda     dp:.tiny (m68kc+60)     ; A7 (a[7]) lo
               inc     dp:.tiny (m68kc+62)
 rts_done:     jmp     long:tick
 rts_punt:     jmp     long:punt
+
+;; stack_push_pc (item 5g): push the current pc (return address) as a big-endian
+;; long onto A7, through the MOVE RAM fast path. Validates BOTH stack words
+;; BEFORE writing either and only then decrements A7 -> carry set = pushed;
+;; carry clear = stack not clean RAM, NOTHING mutated (caller punts). Shared by
+;; BSR and JSR. Called with jsl; itself jsl's mv_ptr (nested, balanced).
+stack_push_pc: lda    dp:.tiny (m68kc+60)     ; A7-4 -> mv_a (A7 untouched yet)
+              sec
+              sbc     ##4
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny (m68kc+62)
+              sbc     ##0
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr             ; validate A7-4
+              bcc     spp_no
+              lda     dp:.tiny mv_a_lo        ; validate A7-2
+              clc
+              adc     ##2
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny mv_a_hi
+              adc     ##0
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr
+              bcc     spp_no
+              lda     dp:.tiny (m68kc+PC_LO)  ; low word -> @A7-2 (eap is for A7-2)
+              xba
+              ldy     ##0
+              sta     [.tiny eap],y
+              lda     dp:.tiny mv_a_lo        ; back to A7-4
+              sec
+              sbc     ##2
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny mv_a_hi
+              sbc     ##0
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr             ; recompute eap for A7-4 (clean)
+              lda     dp:.tiny (m68kc+PC_HI)  ; high word -> @A7-4
+              xba
+              ldy     ##0
+              sta     [.tiny eap],y
+              lda     dp:.tiny (m68kc+60)     ; A7 -= 4
+              sec
+              sbc     ##4
+              sta     dp:.tiny (m68kc+60)
+              bcs     spp_ok
+              dec     dp:.tiny (m68kc+62)
+spp_ok:       sec
+              rtl
+spp_no:       clc
+              rtl
+
+;; BSR.b: push pc, then pc += sext8(disp) — BSR.w (disp8 == 0) punts. The push
+;; done, the displacement is exactly BRA's, so it shares br_take.
+h_bsr:        lda     dp:.tiny cur_op
+              and     ##0x00ff
+              bne     bsr_go
+              jmp     long:punt              ; BSR.w -> C
+bsr_go:       jsl     long:stack_push_pc
+              bcc     bsr_punt
+              lda     dp:.tiny cur_op
+              and     ##0x00ff
+              jmp     long:br_take
+bsr_punt:     jmp     long:punt
+
+;; JSR (An) (item 5g): target = A[reg], push pc, pc = target. Only mode 2
+;; ((An)) is native — abs/disp/index JSR (which need a fetched EA) punt.
+h_jsr:        lda     dp:.tiny cur_op
+              and     ##0x0038               ; mode field
+              cmp     ##0x0010               ; mode 2 = (An)
+              beq     jsr_go
+              jmp     long:punt
+jsr_go:       lda     dp:.tiny cur_op
+              and     ##0x0007
+              asl     a
+              asl     a
+              clc
+              adc     ##32
+              tax
+              lda     dp:.tiny (m68kc+0),x    ; target = A[reg] (saved before push)
+              sta     dp:.tiny jsr_tgt_lo
+              lda     dp:.tiny (m68kc+2),x
+              sta     dp:.tiny jsr_tgt_hi
+              jsl     long:stack_push_pc
+              bcc     jsr_punt
+              lda     dp:.tiny jsr_tgt_lo
+              sta     dp:.tiny (m68kc+PC_LO)
+              lda     dp:.tiny jsr_tgt_hi
+              sta     dp:.tiny (m68kc+PC_HI)
+              jmp     long:tick
+jsr_punt:     jmp     long:punt
 
 ;; 0x70-0x7F: MOVEQ #imm8,Dn — reg = bits 9-11 (bit 8 is don't-care in the
 ;; C decode, mirrored). D[reg] = sext8(imm); N/Z from the value, V=C=0.
@@ -224,7 +320,7 @@ h_bcc:        lda     dp:.tiny cur_op
               jmp     long:bcc_take   ; 0  T : BRA (always)
 bcc_c1:       cmp     ##1
               bne     bcc_c2
-              jmp     long:punt       ; 1  F : BSR -> C
+              jmp     long:h_bsr      ; 1  F : BSR (native, item 5g)
 bcc_c2:       cmp     ##2             ; 2  HI: !C && !Z
               bne     bcc_c3
               lda     dp:.tiny (m68kc+SR_OFF)
@@ -1052,3 +1148,5 @@ mv_a_hi:      .space  2
 eap:          .space  4
 mv_val_lo:    .space  2
 mv_val_hi:    .space  2
+jsr_tgt_lo:   .space  2       ; JSR (An) target address (item 5g)
+jsr_tgt_hi:   .space  2
