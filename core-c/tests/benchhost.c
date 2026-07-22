@@ -19,8 +19,8 @@
 static const char *phase_name(unsigned m){
   static const char *names[] = {"?", "nop", "alu", "ram.b", "ram.w", "ram.l",
                                 "shift", "muldiv", "copy", "fbfill", "crc", "trap",
-                                "branch", "calls", "cmpi"};
-  if (m >= 1 && m <= 14) return names[m];
+                                "branch", "calls", "cmpi", "btst"};
+  if (m >= 1 && m <= 15) return names[m];
   if (m == 0xB0CA) return "done";
   return "?";
 }

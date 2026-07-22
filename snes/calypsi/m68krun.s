@@ -20,11 +20,12 @@
 ;;; operand, clean RAM only); RTS (item 5g, the stack read/write reuse that RAM
 ;;; path); LSL/LSR/ROL/ROR.L Dn by an immediate count (item 5h); and CMPI.W/.L
 ;;; #imm,{Dn,(An),(An)+} (item 5i — the imm is peeked and the operand validated
-;;; before pc/An move). Punting: mem->mem / ROM-source / odd MOVE, BSR.w and
-;;; abs/disp/index JSR, AS/ROX and register-count shifts, byte/word register
-;;; ALU, byte CMPI, BTST#/immediate ALU and any op whose extension word
-;;; straddles the fetch window — all fall to the slow path (also: pending irq,
-;;; STOP, fetch-cache miss): the full C m68k_step / m68k_exec.
+;;; before pc/An move); and BTST #imm,{Dn,(An),(An)+} (item 5j — the boot's hot
+;;; bit test). Punting: mem->mem / ROM-source / odd MOVE, BSR.w and abs/disp/
+;;; index JSR, AS/ROX and register-count shifts, byte/word register ALU, byte
+;;; CMPI, BCHG/BCLR/BSET, the immediate ALU (ORI/ANDI/SUBI/ADDI/EORI) and any
+;;; op whose extension word straddles the fetch window — all fall to the slow
+;;; path (also: pending irq, STOP, fetch-cache miss): the full C m68k_step.
 ;;;
 ;;; Everything lives in the direct page (item 5a): m68kc (pc +64, sr +76,
 ;;; stopped|irq word +78; sizeof==80 packed, verified), the fetch cache,
@@ -121,8 +122,11 @@ d5:           cmp     ##0x10          ; $10-$3F: MOVE.b/.w/.l (h_move validates)
               bcs     punt
               jmp     long:h_move
 d6:           cmp     ##0x0c          ; $0C: CMPI #imm,<ea> (h_cmpi validates)
-              bne     punt
+              bne     d7
               jmp     long:h_cmpi
+d7:           cmp     ##0x08          ; $08: BTST/BCHG/BCLR/BSET #imm (h_btst)
+              bne     punt
+              jmp     long:h_btst
 
 punt:         lda     dp:.tiny cur_op
               jsl     long:m68k_exec  ; the C decoder (op in A)
@@ -1528,6 +1532,133 @@ ccw_done:     lda     dp:.tiny sr_tmp
               sta     dp:.tiny (m68kc+SR_OFF)
               jmp     long:tick
 
+;;; ---- $08: BTST #imm,<ea> (item 5j) — the boot's hot bit-test ----
+;; Static BTST: test bit #n (an immediate ext word) of Dn (32-bit, n&=31) or a
+;; memory byte (n&=7), set Z, leave N/V/C/X. BCHG/BCLR/BSET (they write back)
+;; and An/disp/abs operands punt. Peek-then-commit: bit + operand read before
+;; pc/An move. The 1<<n mask is built by a short shift loop (n's low nibble).
+h_btst:       lda     dp:.tiny cur_op
+              and     ##0x00c0        ; op2 (bits 7-6): 0 = BTST
+              beq     btst_go
+              jmp     long:punt       ; BCHG/BCLR/BSET -> C
+btst_punt:    jmp     long:punt
+btst_go:      lda     dp:.tiny (m68kc+PC_HI)  ; bit-number ext word must be in window
+              cmp     dp:.tiny (mac_fetch_tag+2)
+              bne     btst_punt
+              lda     dp:.tiny (m68kc+PC_LO)
+              and     ##0xe000
+              cmp     dp:.tiny mac_fetch_tag
+              bne     btst_punt
+              lda     dp:.tiny (m68kc+PC_LO)
+              and     ##0x1fff
+              tay
+              lda     [.tiny mac_fetch_base],y
+              xba
+              and     ##0x00ff
+              sta     dp:.tiny btst_bit
+              lda     dp:.tiny cur_op
+              and     ##0x0038
+              sta     dp:.tiny btst_mode
+              beq     btst_dn
+              cmp     ##0x0010
+              beq     btst_mem
+              cmp     ##0x0018
+              beq     btst_mem
+              jmp     long:punt
+btst_dn:      lda     dp:.tiny btst_bit       ; Dn: bit &= 31
+              and     ##0x001f
+              sta     dp:.tiny btst_bit
+              lda     dp:.tiny cur_op
+              and     ##0x0007
+              asl     a
+              asl     a
+              tax
+              lda     dp:.tiny btst_bit       ; bit >= 16 -> test the high word
+              cmp     ##16
+              bcc     btst_dn_lo
+              lda     dp:.tiny (m68kc+2),x
+              sta     dp:.tiny r_lo
+              lda     dp:.tiny btst_bit
+              sec
+              sbc     ##16
+              bra     btst_mkmask
+btst_dn_lo:   lda     dp:.tiny (m68kc+0),x
+              sta     dp:.tiny r_lo
+              lda     dp:.tiny btst_bit
+btst_mkmask:  tay                     ; A = wbit (0-15); build mask = 1<<wbit
+              lda     ##1
+btst_ml:      dey
+              bmi     btst_mdone
+              asl     a
+              bra     btst_ml
+btst_mdone:   and     dp:.tiny r_lo           ; tested word & mask -> result
+              sta     dp:.tiny btst_bit
+              bra     btst_commit
+btst_mem:     lda     dp:.tiny cur_op         ; memory byte @ A[reg]
+              and     ##0x0007
+              asl     a
+              asl     a
+              clc
+              adc     ##32
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny (m68kc+2),x
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr
+              bcs     btst_mem1
+              jmp     long:punt
+btst_mem1:    ldy     ##0
+              lda     [.tiny eap],y
+              and     ##0x00ff
+              sta     dp:.tiny r_lo           ; the byte
+              lda     dp:.tiny btst_bit       ; bit &= 7 ; mask = 1<<bit
+              and     ##0x0007
+              tay
+              lda     ##1
+btst_mml:     dey
+              bmi     btst_mmdone
+              asl     a
+              bra     btst_mml
+btst_mmdone:  and     dp:.tiny r_lo
+              sta     dp:.tiny btst_bit
+btst_commit:  lda     dp:.tiny (m68kc+PC_LO)  ; validated: advance pc past the ext word
+              clc
+              adc     ##2
+              sta     dp:.tiny (m68kc+PC_LO)
+              bcc     btst_c1
+              inc     dp:.tiny (m68kc+PC_HI)
+btst_c1:      lda     dp:.tiny btst_mode      ; (An)+ : byte increment (A7 -> 2)
+              cmp     ##0x0018
+              bne     btst_z
+              lda     dp:.tiny cur_op
+              and     ##0x0007
+              asl     a
+              asl     a
+              clc
+              adc     ##32
+              tax
+              lda     ##1
+              cpx     ##60
+              bne     btst_inc
+              lda     ##2
+btst_inc:     clc
+              adc     dp:.tiny (m68kc+0),x
+              sta     dp:.tiny (m68kc+0),x
+              bcc     btst_z
+              inc     dp:.tiny (m68kc+2),x
+btst_z:       lda     dp:.tiny (m68kc+SR_OFF) ; Z = (tested bit == 0); leave N/V/C/X
+              and     ##0xfffb
+              sta     dp:.tiny sr_tmp
+              lda     dp:.tiny btst_bit
+              bne     btst_zdone
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0004
+              sta     dp:.tiny sr_tmp
+btst_zdone:   lda     dp:.tiny sr_tmp
+              sta     dp:.tiny (m68kc+SR_OFF)
+              jmp     long:tick
+
 ;;; ---- the 256-entry top-byte dispatch table (16-bit in-bank addresses) ----
 optab:
 
@@ -1559,3 +1690,5 @@ shift_c:      .space  2
 cmpi_immsz:   .space  2       ; CMPI operand/immediate size in bytes (item 5i)
 cmpi_off:     .space  2       ; CMPI immediate offset within the fetch window
 cmpi_mode:    .space  2       ; CMPI operand mode field
+btst_bit:     .space  2       ; BTST bit number, then test result (item 5j)
+btst_mode:    .space  2       ; BTST operand mode field

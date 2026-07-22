@@ -111,6 +111,8 @@ class Emit:
     def jsr_an(self, an):            self.w(0x4E90 | an); self.n()  # JSR (An)
     def cmpi_l(self, imm, dn):       self.w(0x0C80 | dn, imm >> 16, imm & 0xFFFF); self.n()  # CMPI.L #imm,Dn
     def cmpi_w(self, imm, dn):       self.w(0x0C40 | dn, imm & 0xFFFF); self.n()             # CMPI.W #imm,Dn
+    def btst_imm_d(self, bit, dn):   self.w(0x0800 | dn, bit & 0xFF); self.n()               # BTST #bit,Dn
+    def btst_imm_ind(self, bit, an): self.w(0x0810 | an, bit & 0xFF); self.n()               # BTST #bit,(An)
 
     # ---- structured helpers ----
     def mark(self, num, name):       # end phase, start the next
@@ -254,6 +256,24 @@ def build():
             a.bcc_skip1(cond)
             a.addq_l(1, 7)
             a.rol_l_imm(1, 7)
+
+    a.mark(15, "btst")
+    # BTST #n,D1 (32-bit) and BTST #n,(A0) (memory byte) — the boot's hot op.
+    # Fold Z (bit clear) into D7 via BEQ; a wrong 1<<n mask or word/byte select
+    # flips a branch. Also the measurable frame count for this handler.
+    a.movea_l_imm(0x200, 0)
+    for val in (0x00000000, 0xFFFFFFFF, 0x00010000, 0x80000001, 0xA5A5A5A5):
+        a.move_l_imm_d(val, 1)
+        for bit in range(0, 32, 3):        # sample bits across both 16-bit halves
+            a.btst_imm_d(bit, 1)
+            a.bcc_skip1(7)                 # BEQ
+            a.addq_l(1, 7)
+            a.rol_l_imm(1, 7)
+    for bit in range(0, 8):                # memory byte path
+        a.btst_imm_ind(bit, 0)
+        a.bcc_skip1(7)
+        a.addq_l(1, 7)
+        a.rol_l_imm(1, 7)
 
     a.mark(10, "crc")
     a.movea_l_imm(0x200, 0)                # 16 longs of the RAM buffer

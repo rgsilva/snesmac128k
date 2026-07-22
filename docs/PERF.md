@@ -329,7 +329,7 @@ included; subtract ~21 for machine-only):
 Round total ≈ 1.08× — and the decode reorder favors LEA/JSR/RTS-dense real
 boot code beyond what the nop-heavy bench can show.
 
-## 9. Item 5: the hand-65816 core (5a–5i)
+## 9. Item 5: the hand-65816 core (5a–5j)
 
 The ladder, each rung parity- and CRC-gated:
 
@@ -344,6 +344,7 @@ The ladder, each rung parity- and CRC-gated:
 | 5g | **RTS / BSR.b / JSR (An)** — the call/return set; the stack read (RTS) and write (BSR/JSR push) reuse the MOVE fast path (the stack is RAM) | gates via a new `calls` phase |
 | 5h | **LSL/LSR/ROL/ROR.L Dn, #cnt** — register shifts, long, immediate count (AS/ROX/register-count/byte/word/memory punt) | `shift` **61 → 13** |
 | 5i | **CMPI.W/.L #imm,{Dn,(An),(An)+}** — the immediate is peeked from the fetch window and the operand validated *before* pc/An move (window straddle, byte, An/disp/abs operand punt) | gates via a new `cmpi` phase |
+| 5j | **BTST #imm,{Dn,(An),(An)+}** — the boot's hot op (~78k of the first 200k instrs); test bit n of Dn (32-bit) or a memory byte, set Z (BCHG/BCLR/BSET punt) | `btst` phase 6 → 4 (diluted by folds; big in the boot) |
 
 The all-native `nop` phase collapsed **23 → 6 frames — ~330 CPU cycles per
 covered instruction, ~4×**. With 5e the `alu` phase (ADD/CMP/ADDQ.L, register
@@ -399,8 +400,14 @@ peek-then-commit shape any fetched-extension-word op needs — the immediate is
 read and the operand validated before `pc`/`An` change, so a straddle or a
 non-RAM operand punts cleanly.
 
-**Where item 5 goes next** (the handler set keeps growing): **BTST #imm** (the
-boot's real hot op, and it reuses 5i's immediate fetch), the ROM-source /
-mem→mem MOVE (unlocks `copy` and the OS's ROM→RAM startup copies), byte/word
-register ALU and shifts (plus AS/ROX), and JSR with a fetched EA. Beyond that:
-SA-1 (M7).
+5j adds **BTST #imm** — the boot's real hot op, reusing 5i's peek-then-commit
+immediate fetch. The `mac_run(1)`-per-step parity harness can't show its win (the
+per-call overhead swamps the per-instruction saving), and the `btst` bench phase
+dilutes it with the fold instructions around each test; but in the boot, where
+BTST is the *dominant* op unsurrounded, the impact is real.
+
+**Where item 5 goes next** (the handler set keeps growing): the ROM-source /
+mem→mem MOVE (unlocks `copy` and the OS's ROM→RAM startup copies), the immediate
+ALU (ORI/ANDI/SUBI/ADDI/EORI, sharing the CMPI/BTST fetch) and BCHG/BCLR/BSET,
+byte/word register ALU and shifts (plus AS/ROX), and JSR with a fetched EA.
+Beyond that: SA-1 (M7).
