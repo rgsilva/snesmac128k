@@ -12,6 +12,8 @@
 ** main provides (mac_snesmem.c). Everything else in this file is identical. */
 #ifdef MAC_SNES
 #  include "macmem.h"                      /* static-inline accessors, no jsl */
+void mac_ram_clear_all(void);              /* calypsi/tilecopy.s: MVN fill */
+void mac_fastboot_load(void);              /* calypsi/tilecopy.s: MVN copy */
 #  define RAM_RD(a)      mac_ram_rd(a)
 #  define RAM_WR(a, v)   mac_ram_wr((a), (v))
 #  define ROM_RD(a)      mac_rom_rd(a)
@@ -301,7 +303,7 @@ static int sony_trap(uint16_t op);                /* the m68k A-line hook, below
 void mac_init(const uint8_t *rom_){
 #ifdef MAC_SNES
   (void)rom_;                                     /* ROM is fixed in cart, via mac_rom_rd */
-  { uint32_t i; for (i = 0; i < MAC_RAM_SIZE; i++) mac_ram_wr(i, 0); }
+  mac_ram_clear_all();                            /* MVN fill: ~2 frames, was ~260 */
 #else
   rom = rom_;
   memset(ram, 0, sizeof ram);
@@ -445,12 +447,9 @@ static void fastboot_apply(void){
   uint32_t i; int r;
 #ifdef MAC_SNES
   /* RAM image embedded in cart ROM at $D80000 (raw2sfc --at 0x180000) */
-  for (i = 0; i < MAC_RAM_SIZE; i++) {
-    const __far uint8_t *p = (const __far uint8_t *)(0xD80000ul + i);
-    RAM_WR(i, *p);
-  }
+  mac_fastboot_load();                            /* three MVNs, ~3 frames */
 #else
-  for (i = 0; i < MAC_RAM_SIZE; i++) RAM_WR(i, fastboot_ram[i]);
+  { uint32_t i; for (i = 0; i < MAC_RAM_SIZE; i++) RAM_WR(i, fastboot_ram[i]); }
 #endif
   for (r = 0; r < 8; r++) { m68kc.d[r] = macfb_d[r]; m68kc.a[r] = macfb_a[r]; }
   m68kc.sr = MACFB_SR; m68kc.usp = MACFB_USP; m68kc.isp = MACFB_ISP;

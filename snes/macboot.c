@@ -35,7 +35,12 @@
 ** straddles. The framebuffer itself is read straight out of WRAM, linear. */
 #define TB0           ((volatile __far uint8_t *)0xB06000ul)
 #define TB1           ((volatile __far uint8_t *)0xB16000ul)
-#define MAC_FB(a)     ((const volatile __far uint8_t *)(0x7E0000ul + (a)))
+
+/* the tile rebuild is hand 65816 (calypsi/tilecopy.s) — the C loop compiled
+** to ~45 instructions/byte and cost 0.4 s per redraw; pan is passed via
+** these globals (no Calypsi calling convention in asm) */
+extern void tile_rows(void);
+extern uint16_t tile_pan_xb, tile_pan_y;
 
 /* The visible window into the Mac screen. panXb is the left edge in framebuffer
 ** BYTES (x8 = pixels), 0..32; panY is the top edge in pixel rows, 0..118 — the
@@ -70,19 +75,9 @@ static void blit_tiles(void){
 ** (set once in video_init). The force-blank wraps only the DMA, so the screen
 ** blinks for a few ms, not for the whole (slow) tile rebuild. */
 static void refresh(void){
-  uint16_t tx, ty; uint8_t r;
-  for (ty = 0; ty < TH; ty++) {
-    /* rows 0-15 -> window 16, rows 16-27 -> window 17 (see TB0/TB1 above) */
-    volatile __far uint8_t *tb = (ty < 16) ? TB0 : TB1;
-    uint16_t tbase = (uint16_t)(((ty < 16) ? ty : ty - 16) * TW * 16);
-    for (r = 0; r < 8; r++) {
-      uint16_t fbrow = (uint16_t)(panY + ty * 8 + r);
-      const volatile __far uint8_t *sp =
-        MAC_FB(0x1A700ul + (uint32_t)fbrow * 64u + (uint32_t)panXb);
-      for (tx = 0; tx < TW; tx++)
-        tb[(uint16_t)(tbase + tx * 16 + r * 2)] = sp[tx];
-    }
-  }
+  tile_pan_xb = (uint16_t)panXb;
+  tile_pan_y  = (uint16_t)panY;
+  tile_rows();                          /* asm: fb -> tile buffer, ~1 ms */
   REG8(0x2100) = 0x8F;                  /* blank just for the VRAM DMA */
   blit_tiles();
   REG8(0x2100) = 0x0F;                  /* screen on */

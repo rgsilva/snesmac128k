@@ -26,7 +26,9 @@
 ** (item H — see macboot.c for the layout notes) */
 #define TB0       ((volatile __far uint8_t *)0xB06000ul)
 #define TB1       ((volatile __far uint8_t *)0xB16000ul)
-#define MAC_FB(a) ((const volatile __far uint8_t *)(0x7E0000ul + (a)))
+
+extern void tile_rows(void);             /* calypsi/tilecopy.s */
+extern uint16_t tile_pan_xb, tile_pan_y; /* fixed centre crop */
 
 static void blit_tiles(void){
   REG8(0x2115) = 0x80; REG16(0x2116) = 0x1000;
@@ -41,17 +43,8 @@ static void blit_tiles(void){
 }
 
 static void refresh(void){               /* fixed centre crop, as macboot */
-  uint16_t tx, ty; uint8_t r;
-  for (ty = 0; ty < TH; ty++) {
-    volatile __far uint8_t *tb = (ty < 16) ? TB0 : TB1;
-    uint16_t tbase = (uint16_t)(((ty < 16) ? ty : ty - 16) * TW * 16);
-    for (r = 0; r < 8; r++) {
-      const volatile __far uint8_t *sp =
-        MAC_FB(0x1A700ul + (uint32_t)(ty * 8 + r) * 64u + 16u);
-      for (tx = 0; tx < TW; tx++)
-        tb[(uint16_t)(tbase + tx * 16 + r * 2)] = sp[tx];
-    }
-  }
+  tile_pan_xb = 16; tile_pan_y = 0;
+  tile_rows();
   REG8(0x2100) = 0x8F; blit_tiles(); REG8(0x2100) = 0x0F;
 }
 
@@ -96,7 +89,8 @@ int main(void){
           refresh();                     /* show the filled framebuffer */
           mb_finish(MB_STATUS_PASS);
         }
-        refresh();                       /* phase boundary: cheap, off the clock */
+        refresh();                       /* ~1 ms in asm — visible progress
+                                         ** without polluting the phase times */
       }
     }
   }
