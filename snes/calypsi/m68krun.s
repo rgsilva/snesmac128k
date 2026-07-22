@@ -18,10 +18,10 @@
 ;;; with N/V/Z/C/X taken from the 65816 ALU (item 5e); and MOVE.W/.L between
 ;;; {Dn,An,(An),(An)+} over the two-region RAM fast path (item 5f — one memory
 ;;; operand, clean RAM only; mem->mem, MOVE.B, ROM/IO, odd, overlay-on and the
-;;; wider addressing modes all punt). Slow path (pending irq, STOP, fetch-cache
-;;; miss, extension word beyond the cached window): the full C m68k_step /
-;;; m68k_exec. Next candidates: byte/word ALU, MOVE.B and ROM-source MOVE,
-;;; CMPI, RTS/JSR.
+;;; wider addressing modes all punt); and RTS (item 5g — the stack read reuses
+;;; the same RAM fast path). Slow path (pending irq, STOP, fetch-cache miss,
+;;; extension word beyond the cached window): the full C m68k_step / m68k_exec.
+;;; Next candidates: BSR/JSR, byte/word ALU, MOVE.B and ROM-source MOVE, CMPI.
 ;;;
 ;;; Everything lives in the direct page (item 5a): m68kc (pc +64, sr +76,
 ;;; stopped|irq word +78; sizeof==80 packed, verified), the fetch cache,
@@ -132,13 +132,50 @@ slow:         jsl     long:m68k_step  ; full C step: irq entry / STOP / refill
 
 ;;; ---- native handlers (each an exact mirror of the C semantics) ----
 
-;; 0x4E: NOP (0x4E71) native; everything else (RTS/JSR/RTE/...) punts.
+;; 0x4E: NOP (0x4E71) and RTS (0x4E75) native; JSR/RTE/LINK/... punt.
 h_4e:         lda     dp:.tiny cur_op
               cmp     ##0x4e71
               beq     nj1
+              cmp     ##0x4e75
+              beq     h_rts
               jmp     long:punt
-nj1:
-              jmp     long:tick
+nj1:          jmp     long:tick
+
+;; RTS: pc = RD32(A7) (big-endian, two region-checked words), A7 += 4. The
+;; stack lives in RAM, so it goes through the same mv_ptr fast path as MOVE.
+;; Punt-before-mutate: A7 is only advanced after both reads succeed, and a
+;; partial pc-hi write is harmless (C's RTS re-reads A7 and overwrites it).
+h_rts:        lda     dp:.tiny (m68kc+60)     ; A7 (a[7]) lo
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny (m68kc+62)     ; A7 hi
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr
+              bcc     rts_punt
+              ldy     ##0
+              lda     [.tiny eap],y
+              xba
+              sta     dp:.tiny (m68kc+PC_HI)  ; word @A7   -> pc bits 16-31
+              lda     dp:.tiny mv_a_lo        ; a += 2
+              clc
+              adc     ##2
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny mv_a_hi
+              adc     ##0
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr
+              bcc     rts_punt
+              ldy     ##0
+              lda     [.tiny eap],y
+              xba
+              sta     dp:.tiny (m68kc+PC_LO)  ; word @A7+2 -> pc bits 0-15
+              lda     dp:.tiny (m68kc+60)     ; A7 += 4
+              clc
+              adc     ##4
+              sta     dp:.tiny (m68kc+60)
+              bcc     rts_done
+              inc     dp:.tiny (m68kc+62)
+rts_done:     jmp     long:tick
+rts_punt:     jmp     long:punt
 
 ;; 0x70-0x7F: MOVEQ #imm8,Dn — reg = bits 9-11 (bit 8 is don't-care in the
 ;; C decode, mirrored). D[reg] = sext8(imm); N/Z from the value, V=C=0.

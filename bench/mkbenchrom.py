@@ -105,6 +105,10 @@ class Emit:
     def bra_s(self, target):         # disp8 relative to opcode address + 2
         self.w(0x6000 | ((target - (self.here() + 2)) & 0xFF))
 
+    def bsr_s(self, target):         # BSR.b — like BRA.b but pushes a return addr
+        self.w(0x6100 | ((target - (self.here() + 2)) & 0xFF)); self.n()
+    def rts(self):                   self.w(0x4E75); self.n()
+
     # ---- structured helpers ----
     def mark(self, num, name):       # end phase, start the next
         self.phase = name
@@ -203,6 +207,21 @@ def build():
             a.bcc_skip1(cond)                  # taken -> skip the ADDQ below
             a.addq_l(1, 7)                     # not-taken path only: bump D7
             a.rol_l_imm(1, 7)                  # always: fold position into D7
+
+    a.mark(13, "calls")
+    # BSR/RTS: RTS is native, BSR punts. A subroutine folds D7 and returns;
+    # main BSRs into it 32x. If RTS returns to the wrong address the run
+    # derails and the CRC (or the harness timeout) catches it. The BSR
+    # displacement stays inside disp8 (<=61 calls); D7 threads into the crc.
+    sub = a.here() + 2                     # subroutine right after the skip-BRA
+    a.bra_s(sub + 6)                       # jump over it (rol+addq+rts = 6 bytes)
+    a.rol_l_imm(1, 7)                      # sub: fold D7 ...
+    a.addq_l(1, 7)                         #      ... deterministically, then
+    a.rts()                                #      return
+    assert a.here() == sub + 6
+    for _ in range(32):
+        a.bsr_s(sub)
+    a.n(32 * 3)                            # ledger: each call = 2 folds + the RTS
 
     a.mark(10, "crc")
     a.movea_l_imm(0x200, 0)                # 16 longs of the RAM buffer

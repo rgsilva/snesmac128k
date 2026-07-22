@@ -329,7 +329,7 @@ included; subtract ~21 for machine-only):
 Round total ≈ 1.08× — and the decode reorder favors LEA/JSR/RTS-dense real
 boot code beyond what the nop-heavy bench can show.
 
-## 9. Item 5: the hand-65816 core (5a–5f)
+## 9. Item 5: the hand-65816 core (5a–5g)
 
 The ladder, each rung parity- and CRC-gated:
 
@@ -341,6 +341,7 @@ The ladder, each rung parity- and CRC-gated:
 | 5d | **native handlers** (exact flag-for-flag C mirrors, punt-before-mutate): NOP, MOVEQ×16, BRA.b, BNE.b, BEQ.b, DBRA | **615** |
 | 5e | **the branch + register-ALU set**: the *full* Bcc (all 14 conditions + BRA), ADDQ/SUBQ #d,An (no flags), and the long register-direct ALU — ADD/SUB/CMP/AND/OR.L Dn,Dn and ADDQ/SUBQ.L #d,Dn | `alu` **49 → 19** |
 | 5f | **MOVE.W/.L over the RAM fast path**: src/dst in {Dn,An,(An),(An)+}, one memory operand, clean RAM only (mem→mem, MOVE.B, ROM/IO, odd, overlay-on, wider modes all punt) | `fbfill` **265 → 84**, `ram.l` 55→17, `ram.w` 49→14 |
+| 5g | **RTS** — `pc = RD32(A7); A7 += 4`, the stack read reusing the MOVE fast path (the stack is RAM) | gates via a new `calls` phase |
 
 The all-native `nop` phase collapsed **23 → 6 frames — ~330 CPU cycles per
 covered instruction, ~4×**. With 5e the `alu` phase (ADD/CMP/ADDQ.L, register
@@ -375,7 +376,13 @@ or bumps an `(An)+` register — the punt-before-mutate rule. `copy` (MOVE.L
 (A0)+,(A1)+ from ROM) and `ram.b` are untouched: mem→mem, ROM-source and MOVE.B
 still punt.
 
-**Where item 5 goes next** (the handler set keeps growing): MOVE.B and the
-ROM-source / mem→mem MOVE (unlocks `copy` and much of the boot), byte/word sizes
-for the register ALU, CMPI (the other half of the RAM-test mix), and RTS/JSR.
-Beyond that: SA-1 (M7).
+5g adds **RTS** (`pc = RD32(A7); A7 += 4`) — subroutine returns are everywhere in
+real Toolbox/Finder code, and the stack is RAM, so the read is the same two
+region-checked words the MOVE handler uses. The bench never called subroutines,
+so a `calls` phase (32× `BSR sub … RTS`, D7 threaded into the CRC) was added to
+gate it: BSR punts, RTS runs native, and a wrong return address derails the run.
+
+**Where item 5 goes next** (the handler set keeps growing): BSR/JSR (the stack
+*write* side of the call, plus a target EA), MOVE.B and the ROM-source / mem→mem
+MOVE (unlocks `copy` and the OS's ROM→RAM startup copies), byte/word sizes for
+the register ALU, and CMPI. Beyond that: SA-1 (M7).
