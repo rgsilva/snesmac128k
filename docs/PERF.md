@@ -193,6 +193,54 @@ with change A, is listed separately since earlier rows predate it).
 | B VBL down-counter | 1503 | 79 | 106 | 107 | 117 | 135 | 119 | 82 | 94 | 630 | — | 558 |
 | A fetch-once + hook | 1309 | 64 | 91 | 91 | 102 | 120 | 104 | 74 | 86 | 544 | 47 | 641 |
 | C FastROM ($31+MEMSEL) | 1139 | 55 | 79 | 79 | 89 | 105 | 90 | 64 | 76 | 474 | 42 | 737 |
+| D+E word ops, inline | 975 | 50 | 75 | 75 | 76 | 86 | 86 | 60 | 62 | 378 | 36 | 861 |
+| F PC-window fetch cache | 967 | 50 | 74 | 74 | 75 | 86 | 84 | 60 | 62 | 375 | 35 | 868 |
+| H two-region RAM | ~985 | 54 | 78 | 76 | 78 | 86 | 89 | 63 | 65 | 359 | 38 | 852 |
+
+**Cumulative: 2.3× (376 → ~860 instr/s).** Estimates vs reality, in public: B
+was supposed to be the small one and delivered 1.49×; F was supposed to be
+1.3–1.8× and delivered 1%; H was "the endgame" and *lost* 2% — because after
+C, cart SRAM is a 6-master-clock memory while WRAM is 8, so the win H was
+designed for had already been taken. H stays anyway: it cuts the cart-SRAM
+requirement from 256 KB (no real cartridge) to **26 KB** (fits a real 32 KB
+cart), which is what makes hardware snesmac plausible — and it is the memory
+layout SA-1 BW-RAM maps onto.
+
+## 7. Fastboot (items I1/I2) — the boot-time cut
+
+`make macboot` now builds with `FASTBOOT=1` by default (`FASTBOOT=0` for the
+purist boot):
+
+- **I1 — skip the RAM test.** The 128K ROM burns ~1.5M instructions before
+  its first disk read: the power-on RAM test (which does *not* zero RAM — the
+  patterns stay), hardware init, and the boot-chime delay loops (we don't
+  emulate sound). `macfastboot_gen` boots the user's ROM on the host up to
+  the instruction about to issue the first .Sony read and dumps the complete
+  machine state (registers, VIA + VBL phase, full 128 KB RAM image). The live
+  boot teleports there when it first reaches the test's entry PC. Validated
+  by trajectory comparison: framebuffer hash and VBL count match the cold
+  boot exactly at 1.6M/2.5M/5M/15M-step checkpoints, and the machine lands on
+  the identical Finder desktop (the PC micro-drifts a few instructions from
+  uncaptured floppy-motor phase — invisible in behavior).
+- **I2 — `_BlockMove` at C speed.** The A-line hook services A?2E as a host
+  memmove over the fast accessors (~2 orders of magnitude faster than ~3
+  emulated instructions per byte), D0=noErr, Z set. The System loads through
+  BlockMove constantly, so the same desktop-equality run validates it.
+- Both artifacts are generated at build time from the user's own ROM + disk
+  (like `macparity_ref.h`) and are never committed; the RAM image rides the
+  cart at `$D80000`.
+
+On the SNES the teleport fires ~11k instructions in: the mailbox trace jumps
+from `vbl=00000000` to `vbl=0000007D` and the boot proceeds straight into
+disk I/O. At ~860 instr/s the pre-Happy-Mac dead time drops from ~34 minutes
+of emulated grind to seconds.
+
+**Measured-but-deferred:** hardware mul/div (K) — the bench's muldiv phase
+sits only ~25% over the floor, and boot code barely multiplies; revisit if a
+future workload says otherwise. The remaining big lever short of SA-1 is the
+per-step floor itself (~50 frames ≈ 16k master clocks per NOP: call-chain
+depth, 32-bit direct-page traffic, decode chains) — that is item J, hand
+65816 for the step loop, guided by this table.
 
 Reading the baseline: a bare NOP costs ~44,600 master clocks — the floor
 every instruction pays (two full fetch16s: the real one plus the sony-trap

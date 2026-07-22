@@ -149,12 +149,38 @@ test-bench: $(BUILD)/macbench.sfc $(BUILD)/benchhost
 	 else echo "BENCH CRC MISMATCH host=$$h snes=$$s"; exit 1; fi
 
 # ---- the live boot: run the machine + draw the framebuffer, disk embedded ----
+# FASTBOOT=1 (default): skip the ROM's ~1.5M-instruction RAM test + boot-chime
+# delay by teleporting to a host-generated warm state (macfastboot_gen), and
+# HLE _BlockMove as a C-speed copy — docs/PERF.md items I1/I2. Both are
+# faithfulness trades gated on MAC_FASTBOOT; build FASTBOOT=0 for the purist
+# boot. The warm state is generated from the user's own ROM+disk at build
+# time (like macparity_ref.h) and never committed.
+FASTBOOT ?= 1
+$(BUILD)/macfbgen: ../core-c/tests/macfastboot_gen.c ../core-c/src/mac.c ../core-c/src/m68k.c | $(BUILD)
+	cc -O2 -std=c11 -I../core-c/src -o $@ ../core-c/tests/macfastboot_gen.c ../core-c/src/mac.c ../core-c/src/m68k.c
+$(BUILD)/macfastboot_ref.h $(BUILD)/macfastboot_ram.bin: $(BUILD)/macfbgen ../roms/mac128k.rom ../roms/sys11_data.bin
+	$(BUILD)/macfbgen ../roms/mac128k.rom ../roms/sys11_data.bin $(BUILD)/macfastboot_ref.h $(BUILD)/macfastboot_ram.bin
+$(BUILD)/macfast.o: ../core-c/src/mac.c ../core-c/src/mac.h ../core-c/src/m68k.h macmem.h $(BUILD)/macfastboot_ref.h | $(BUILD)
+	$(CC) -o $@ ../core-c/src/mac.c $(MACSNES_CFLAGS) -DMAC_FASTBOOT --list-file=$(@:.o=.lst)
+
+ifeq ($(FASTBOOT),1)
+MACBOOT_MACO := $(BUILD)/macfast.o
+MACBOOT_FLAG := -DMAC_FASTBOOT
+MACBOOT_BLOB := --at 0x180000 $(BUILD)/macfastboot_ram.bin
+MACBOOT_DEPS := $(BUILD)/macfastboot_ram.bin
+else
+MACBOOT_MACO := $(BUILD)/mac.o
+MACBOOT_FLAG :=
+MACBOOT_BLOB :=
+MACBOOT_DEPS :=
+endif
+
 $(BUILD)/macboot.o: macboot.c calypsi/mailbox.h ../core-c/src/mac.h | $(BUILD)
-	$(CC) -o $@ macboot.c $(MACSNES_CFLAGS) --list-file=$(@:.o=.lst)
-$(BUILD)/macboot.raw: $(BUILD)/macheader.o $(BUILD)/macmailbox.o $(BUILD)/macm68k.o $(BUILD)/mac.o $(BUILD)/macboot.o
+	$(CC) -o $@ macboot.c $(MACSNES_CFLAGS) $(MACBOOT_FLAG) --list-file=$(@:.o=.lst)
+$(BUILD)/macboot.raw: $(BUILD)/macheader.o $(BUILD)/macmailbox.o $(BUILD)/macm68k.o $(MACBOOT_MACO) $(BUILD)/macboot.o
 	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macboot.map $^
-$(BUILD)/macboot.sfc: $(BUILD)/macboot.raw tools/raw2sfc.py ../roms/mac128k.rom ../roms/sys11_data.bin
-	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom --at 0x100000 ../roms/sys11_data.bin
+$(BUILD)/macboot.sfc: $(BUILD)/macboot.raw tools/raw2sfc.py ../roms/mac128k.rom ../roms/sys11_data.bin $(MACBOOT_DEPS)
+	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom --at 0x100000 ../roms/sys11_data.bin $(MACBOOT_BLOB)
 
 .PHONY: macboot test-macboot
 macboot: $(BUILD)/macboot.sfc

@@ -148,8 +148,13 @@ int main(void){
   REG8(0x420D) = 0x01;                  /* MEMSEL: FastROM (map mode $31) */
   REG8(0x4200) = 0x01;                  /* enable auto joypad read (no NMI) */
   video_init();
-  mac_init(0);                          /* ROM in cart, RAM (SRAM) cleared */
+  mac_init(0);                          /* ROM in cart, RAM cleared */
   mac_set_disk(0, DISK_SIZE);           /* enable the HLE .Sony (disk at $D00000) */
+#ifdef MAC_FASTBOOT
+  mac_fastboot_arm(0);                  /* skip the RAM test + boot chime: teleport
+                                        ** to the first disk read (state embedded
+                                        ** at $D80000; see docs/PERF.md I1) */
+#endif
   refresh();                            /* first draw, screen on */
   for (;;) {
     mac_step();

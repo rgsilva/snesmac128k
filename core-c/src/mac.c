@@ -57,6 +57,10 @@ uint8_t *mac_ram_ptr(void)   { return ram; }    /* host tools read the framebuff
 int mac_dbg_ier(void){ return via_ier; }
 int mac_dbg_ifr(void){ return via_ifr; }
 
+/* Whole-VIA snapshot (for the MAC_FASTBOOT warm state; harmless elsewhere). */
+void mac_dbg_via_dump(uint8_t v[16]);
+void mac_dbg_via_load(const uint8_t v[16]);
+
 /* Mouse: position is injected into the low-memory globals (mac_set_mouse); the
 ** button is VIA port B bit 3 (SW, low = pressed), read back below. */
 static int mouse_btn;                    /* 1 = pressed */
@@ -109,6 +113,23 @@ static void via_write(uint32_t a, uint8_t v){
              via_update_irq(); break;
     default: break;
   }
+}
+
+void mac_dbg_via_dump(uint8_t v[16]){
+  v[0] = via_orb; v[1] = via_ora; v[2] = via_ddrb; v[3] = via_ddra;
+  v[4] = via_acr; v[5] = via_pcr; v[6] = via_sr;  v[7] = via_ifr; v[8] = via_ier;
+  v[9] = (uint8_t)via_t1; v[10] = (uint8_t)(via_t1 >> 8);
+  v[11] = (uint8_t)via_t2; v[12] = (uint8_t)(via_t2 >> 8);
+  v[13] = (uint8_t)vbl_timer; v[14] = (uint8_t)(vbl_timer >> 8);  /* VBL phase */
+  v[15] = 0;
+}
+void mac_dbg_via_load(const uint8_t v[16]){
+  via_orb = v[0]; via_ora = v[1]; via_ddrb = v[2]; via_ddra = v[3];
+  via_acr = v[4]; via_pcr = v[5]; via_sr = v[6];  via_ifr = v[7]; via_ier = v[8];
+  via_t1 = (uint16_t)(v[9] | (v[10] << 8));
+  via_t2 = (uint16_t)(v[11] | (v[12] << 8));
+  vbl_timer = (uint16_t)(v[13] | (v[14] << 8));
+  via_update_irq();
 }
 
 /* ---- IWM (floppy) — track the state-machine lines (ca0..q7, selected by
@@ -329,8 +350,22 @@ void mac_set_mouse(int x, int y, int btn){
 static int sony_trap(uint16_t op){
   int tnum, refnum;
   uint32_t pb;
-  if (!disk_size) return 0;
   if ((op & 0xF800u) != 0xA000u) return 0;       /* not an OS (Device Manager) trap */
+#ifdef MAC_FASTBOOT
+  if ((op & 0xFFu) == 0x2Eu) {                    /* _BlockMove (PERF.md item I2):
+                                                  ** the boot copies the System
+                                                  ** through it constantly; run the
+                                                  ** copy at C speed instead of ~3
+                                                  ** emulated instructions per byte */
+    uint32_t src = m68kc.a[0], dst = m68kc.a[1], n = m68kc.d[0], k;
+    if (dst <= src) { for (k = 0; k < n; k++) m68k_write8(dst + k, m68k_read8(src + k)); }
+    else            { for (k = n; k != 0; k--) m68k_write8(dst + k - 1, m68k_read8(src + k - 1)); }
+    m68kc.d[0] = 0;                               /* noErr, Z set (TST.W D0) */
+    m68kc.sr = (uint16_t)((m68kc.sr & ~0x0Fu) | 0x04u);
+    return 1;
+  }
+#endif
+  if (!disk_size) return 0;
   tnum = op & 0xFF;
   if (tnum < 0x02 || tnum > 0x06) return 0;       /* Read/Write/Control/Status/KillIO only */
   pb = m68kc.a[0];
@@ -394,7 +429,44 @@ static int sony_trap(uint16_t op){
   return 1;
 }
 
+#ifdef MAC_FASTBOOT
+/* Warm-start teleport (PERF.md item I1): the 128K ROM burns ~1.5M
+** instructions on its RAM test (which does NOT zero RAM — the patterns
+** stay) plus init/boot-chime delay loops before the first disk read. The
+** build generates that machine state once on the host (macfastboot_gen);
+** when the live boot first reaches the test's entry PC we load the full
+** RAM image + registers + VIA and resume at the instruction about to issue
+** the first .Sony read — bit-identical to having waited, minus the wait. */
+#include "macfastboot_ref.h"
+static const uint8_t *fastboot_ram;   /* host: image buffer; SNES: unused */
+static uint8_t fastboot_armed;
+void mac_fastboot_arm(const uint8_t *ramimg){ fastboot_ram = ramimg; fastboot_armed = 1; }
+static void fastboot_apply(void){
+  uint32_t i; int r;
+#ifdef MAC_SNES
+  /* RAM image embedded in cart ROM at $D80000 (raw2sfc --at 0x180000) */
+  for (i = 0; i < MAC_RAM_SIZE; i++) {
+    const __far uint8_t *p = (const __far uint8_t *)(0xD80000ul + i);
+    RAM_WR(i, *p);
+  }
+#else
+  for (i = 0; i < MAC_RAM_SIZE; i++) RAM_WR(i, fastboot_ram[i]);
+#endif
+  for (r = 0; r < 8; r++) { m68kc.d[r] = macfb_d[r]; m68kc.a[r] = macfb_a[r]; }
+  m68kc.sr = MACFB_SR; m68kc.usp = MACFB_USP; m68kc.isp = MACFB_ISP;
+  m68kc.pc = MACFB_PC;
+  mac_dbg_via_load(macfb_via);
+  overlay = 0;
+  mac_fetch_invalidate();
+  vbl_count = MACFB_VBL;
+  fastboot_armed = 0;
+}
+#endif
+
 void mac_step(void){
+#ifdef MAC_FASTBOOT
+  if (fastboot_armed && m68kc.pc == MACFB_TRIGGER_PC) fastboot_apply();
+#endif
   m68k_step();
   via_t1 = (uint16_t)(via_t1 - 1);   /* rough timer motion so poll loops progress */
   via_t2 = (uint16_t)(via_t2 - 1);
