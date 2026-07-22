@@ -66,11 +66,14 @@ Load `snes/build/macboot.sfc` in an accurate emulator such as
 [Mesen](https://www.mesen.ca/), or flash it to a cart. It boots on its own — Happy Mac,
 "Welcome to Macintosh", then the Finder desktop.
 
-**It is slow.** The 68000 is interpreted in software on a 3.58 MHz 16-bit CPU, so a
-full boot is tens of minutes to hours (crank the emulator's fast-forward). It's a
-"watch a Mac come alive on a SNES" demo, not a daily driver — see
-[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) and [docs/FUTURE.md](docs/FUTURE.md)
-for the perf story and where it's going.
+**It is slow — but honestly slow.** The 68000 is interpreted in software on a
+3.58 MHz 16-bit CPU. The default build teleports past the ROM's RAM test (the
+Happy Mac shows up in moments) and the measured optimization campaign has it
+~6× faster than the first boots; the desktop is still tens of minutes away in
+real time — minutes with fast-forward. See
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the honest numbers,
+[docs/PERF.md](docs/PERF.md) for the campaign, and
+[docs/FUTURE.md](docs/FUTURE.md) for where it goes next.
 
 ## Build
 
@@ -101,9 +104,10 @@ core-c/src/      the machine: the lean 68000 core (m68k.c), the Mac model + HLE
 core-c/musashi/  vendored Musashi 68000 core (MIT) — a host-only correctness oracle.
 core-c/tests/    the validation harness: SingleStepTests vectors + the host<->SNES
                  parity reference generator.
-snes/            the SNES ROM: Calypsi build of the same core + machine, the SRAM/ROM
-                 memory backend (macmem.c), the live-boot display (macboot.c), the
-                 parity ROM (macparity.c). `make macboot` -> build/macboot.sfc
+snes/            the SNES ROM: Calypsi build of the same core + machine, the inline
+                 memory backend (macmem.h/m68kbus.h), the hand-65816 video copy
+                 (calypsi/tilecopy.s), the live boot (macboot.c), the parity ROM
+                 (macparity.c) and the bench (macbench.c). make macboot -> .sfc
 docs/            documentation + the design brief.
 roms/            your Mac ROM + disk images (gitignored — Apple copyright).
 ```
@@ -120,8 +124,9 @@ roms/            your Mac ROM + disk images (gitignored — Apple copyright).
 ## Legal & credits
 
 The Macintosh 128K ROM and Apple's System / Finder are **copyright Apple** and are not
-distributed here — snesmac is **bring-your-own-ROM**. The emulator ships freely; the
-`roms/` directory and all boot screenshots are gitignored.
+distributed here — snesmac is **bring-your-own-ROM**: the `roms/` directory (ROM and
+disk binaries) is gitignored, and the build regenerates every derived artifact (parity
+references, the fastboot warm state) from your own dumps.
 
 - CPU test vectors: [SingleStepTests/m68000](https://github.com/SingleStepTests/m68000).
 - [Musashi](https://github.com/kstenerud/Musashi) 68000 core (MIT, Karl Stenerud) — the
