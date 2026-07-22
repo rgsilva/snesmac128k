@@ -32,7 +32,10 @@ static const uint8_t *rom;                 /* 64 KB */
 #  define RAM_WR16(a, v) (ram[a] = (uint8_t)((v) >> 8), ram[(a) + 1] = (uint8_t)(v))
 #  define ROM_RD16(a)    ((uint16_t)(((uint16_t)rom[a] << 8) | rom[(a) + 1]))
 #endif
-static int            overlay;             /* 1 at reset: ROM at $0 */
+int                   mac_overlay_on;      /* 1 at reset: ROM at $0. Non-static:
+                                           ** the m68k core's inline bus fast
+                                           ** paths (snes/m68kbus.h) test it. */
+#define overlay mac_overlay_on             /* local alias, minimal diff */
 static uint32_t       vbl_count;
 static uint16_t       vbl_timer;           /* down-counter to the next VBL: a
                                            ** 16-bit compare-to-zero, where the
@@ -269,8 +272,11 @@ void m68k_write32(uint32_t a, uint32_t v){
 ** enough: fetch = read16. */
 #ifdef MAC_SNES
 #define FETCH_TAG_INVALID 0xFFFFFFFFul
-static uint32_t fetch_tag = FETCH_TAG_INVALID;    /* pc & 0xFFFFE000 of the block */
-static const volatile __far uint8_t *fetch_base;  /* -> block byte 0 */
+/* non-static: the core's inline fetch hit-path (snes/m68kbus.h) reads these */
+uint32_t mac_fetch_tag = FETCH_TAG_INVALID;       /* pc & 0xFFFFE000 of the block */
+const volatile __far uint8_t *mac_fetch_base;     /* -> block byte 0 */
+#define fetch_tag  mac_fetch_tag
+#define fetch_base mac_fetch_base
 static void mac_fetch_invalidate(void){ fetch_tag = FETCH_TAG_INVALID; }
 uint16_t m68k_fetch16(uint32_t pc){
   uint32_t tag = pc & 0xFFFFE000ul;

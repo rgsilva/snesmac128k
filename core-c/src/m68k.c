@@ -4,13 +4,29 @@
 ** SingleStepTests/m68000 vectors and, differentially, against Musashi. */
 #include "m68k.h"
 
+/* Memory-access macro layer. Default: the extern embedder interface
+** (m68k.h). A machine build may define M68K_BUS_INLINE to inject inline
+** fast paths (snes/m68kbus.h: RAM/ROM decode + the PC-window fetch cache
+** hit straight-line in the core, no jsl per access — docs/PERF.md). */
+#ifdef M68K_BUS_INLINE
+#  include "m68kbus.h"
+#else
+#  define M68K_RD8(a)      m68k_read8(a)
+#  define M68K_RD16(a)     m68k_read16(a)
+#  define M68K_RD32(a)     m68k_read32(a)
+#  define M68K_WR8(a, v)   m68k_write8((a), (v))
+#  define M68K_WR16(a, v)  m68k_write16((a), (v))
+#  define M68K_WR32(a, v)  m68k_write32((a), (v))
+#  define M68K_FETCH16(a)  m68k_fetch16(a)
+#endif
+
 m68k_t m68kc;
 
 /* size is always in bytes: 1, 2, or 4 */
 static const uint32_t MASKSZ[5] = {0, 0xFFu, 0xFFFFu, 0, 0xFFFFFFFFu};
 static const uint32_t MSBSZ[5]  = {0, 0x80u, 0x8000u, 0, 0x80000000u};
 
-static uint16_t fetch16(void){ uint16_t w = m68k_fetch16(m68kc.pc); m68kc.pc += 2; return w; }
+static uint16_t fetch16(void){ uint16_t w = M68K_FETCH16(m68kc.pc); m68kc.pc += 2; return w; }
 static uint32_t fetch32(void){ uint32_t l = (uint32_t)fetch16() << 16; return l | fetch16(); }
 
 /* Explicit sign-extend of the low 8 bits to 32. Calypsi miscompiles the
@@ -104,14 +120,14 @@ static void ea_resolve(int mode, int reg, int size){
   ea_kind = 0; ea_ad = 0;
 }
 static uint32_t mem_r(uint32_t a, int size){
-  if (size == 1) return m68k_read8(a);
-  if (size == 2) return m68k_read16(a);
-  return m68k_read32(a);
+  if (size == 1) return M68K_RD8(a);
+  if (size == 2) return M68K_RD16(a);
+  return M68K_RD32(a);
 }
 static void mem_w(uint32_t a, int size, uint32_t v){
-  if (size == 1) m68k_write8(a, (uint8_t)v);
-  else if (size == 2) m68k_write16(a, (uint16_t)v);
-  else m68k_write32(a, v);
+  if (size == 1) M68K_WR8(a, (uint8_t)v);
+  else if (size == 2) M68K_WR16(a, (uint16_t)v);
+  else M68K_WR32(a, v);
 }
 static uint32_t ea_val(int size){
   if (ea_kind == 1) return dreg_r(ea_reg, size);
@@ -141,9 +157,9 @@ int (*m68k_aline_hook)(uint16_t op) = 0;
 static void exception(int vec, uint32_t push_pc){
   uint16_t oldsr = m68kc.sr;
   m68k_set_sr((uint16_t)((m68kc.sr | SR_S) & ~SR_T));
-  m68kc.a[7] -= 4; m68k_write32(m68kc.a[7], push_pc);
-  m68kc.a[7] -= 2; m68k_write16(m68kc.a[7], oldsr);
-  m68kc.pc = m68k_read32((uint32_t)vec * 4);
+  m68kc.a[7] -= 4; M68K_WR32(m68kc.a[7], push_pc);
+  m68kc.a[7] -= 2; M68K_WR16(m68kc.a[7], oldsr);
+  m68kc.pc = M68K_RD32((uint32_t)vec * 4);
 }
 static int priv_ok(void){                     /* true if allowed (supervisor) */
   if (m68kc.sr & SR_S) return 1;
@@ -357,12 +373,12 @@ static void op_group4(uint16_t op){                  /* misc */
   }
   if ((op & 0xFFF8) == 0x4E50) {                     /* LINK An,#d16 */
     int an = op & 7; int16_t disp = (int16_t)fetch16();
-    m68kc.a[7] -= 4; m68k_write32(m68kc.a[7], m68kc.a[an]);
+    m68kc.a[7] -= 4; M68K_WR32(m68kc.a[7], m68kc.a[an]);
     m68kc.a[an] = m68kc.a[7]; m68kc.a[7] += (int32_t)disp; return;
   }
   if ((op & 0xFFF8) == 0x4E58) {                     /* UNLK An (An==A7: load overwrites the +4) */
     int an = op & 7; uint32_t tmp;
-    m68kc.a[7] = m68kc.a[an]; tmp = m68k_read32(m68kc.a[7]); m68kc.a[7] += 4; m68kc.a[an] = tmp; return;
+    m68kc.a[7] = m68kc.a[an]; tmp = M68K_RD32(m68kc.a[7]); m68kc.a[7] += 4; m68kc.a[an] = tmp; return;
   }
   if ((op & 0xFFF8) == 0x4E60) {                     /* MOVE An,USP */
     if (priv_ok()) { if (m68kc.sr & SR_S) m68kc.usp = m68kc.a[op & 7]; else m68kc.a[7] = m68kc.a[op & 7]; } return;
@@ -375,14 +391,14 @@ static void op_group4(uint16_t op){                  /* misc */
     case 0x4E70: if (priv_ok()) {} return;          /* RESET (no-op here) */
     case 0x4E73:                                     /* RTE */
       if (!priv_ok()) return;
-      { uint16_t nsr = m68k_read16(m68kc.a[7]); m68kc.a[7] += 2;
-        uint32_t npc = m68k_read32(m68kc.a[7]); m68kc.a[7] += 4;
+      { uint16_t nsr = M68K_RD16(m68kc.a[7]); m68kc.a[7] += 2;
+        uint32_t npc = M68K_RD32(m68kc.a[7]); m68kc.a[7] += 4;
         m68k_set_sr(nsr); m68kc.pc = npc; } return;
     case 0x4E75:                                     /* RTS */
-      m68kc.pc = m68k_read32(m68kc.a[7]); m68kc.a[7] += 4; return;
+      m68kc.pc = M68K_RD32(m68kc.a[7]); m68kc.a[7] += 4; return;
     case 0x4E77:                                     /* RTR */
-      { uint16_t ccr = m68k_read16(m68kc.a[7]); m68kc.a[7] += 2; set_ccr(ccr);
-        m68kc.pc = m68k_read32(m68kc.a[7]); m68kc.a[7] += 4; } return;
+      { uint16_t ccr = M68K_RD16(m68kc.a[7]); m68kc.a[7] += 2; set_ccr(ccr);
+        m68kc.pc = M68K_RD32(m68kc.a[7]); m68kc.a[7] += 4; } return;
     case 0x4E76:                                     /* TRAPV */
       if (m68kc.sr & SR_V) exception(EXC_TRAPV, m68kc.pc); return;
     case 0x4E72:                                     /* STOP #imm */
@@ -395,7 +411,7 @@ static void op_group4(uint16_t op){                  /* misc */
     ea_resolve(mode, reg, 4); m68kc.pc = ea_ad; return;
   }
   if ((op & 0xFFC0) == 0x4E80) {                     /* JSR */
-    ea_resolve(mode, reg, 4); m68kc.a[7] -= 4; m68k_write32(m68kc.a[7], m68kc.pc); m68kc.pc = ea_ad; return;
+    ea_resolve(mode, reg, 4); m68kc.a[7] -= 4; M68K_WR32(m68kc.a[7], m68kc.pc); m68kc.pc = ea_ad; return;
   }
   if ((op & 0xF1C0) == 0x41C0) {                     /* LEA <ea>,An */
     int an = (op >> 9) & 7; ea_resolve(mode, reg, 4); m68kc.a[an] = ea_ad; return;
@@ -403,7 +419,7 @@ static void op_group4(uint16_t op){                  /* misc */
   if ((op & 0xFFF8) == 0x4840) { int dn = op & 7;    /* SWAP (mode 0) — before PEA */
     uint32_t v = m68kc.d[dn]; v = (v >> 16) | (v << 16); m68kc.d[dn] = v; fl_logic(v, 4); return; }
   if ((op & 0xFFC0) == 0x4840) {                     /* PEA <ea> */
-    ea_resolve(mode, reg, 4); m68kc.a[7] -= 4; m68k_write32(m68kc.a[7], ea_ad); return;
+    ea_resolve(mode, reg, 4); m68kc.a[7] -= 4; M68K_WR32(m68kc.a[7], ea_ad); return;
   }
   if ((op & 0xFFB8) == 0x4880) {                     /* EXT */
     int dn = op & 7;
@@ -495,13 +511,13 @@ static void op_group0(uint16_t op){                  /* immediate ALU + bit ops 
     int dn = (op >> 9) & 7, an = op & 7, dir = (op >> 7) & 1, lng = (op >> 6) & 1;
     uint32_t a = m68kc.a[an] + (uint32_t)(int32_t)(int16_t)fetch16();
     if (dir) {                                       /* reg -> mem */
-      if (lng) { m68k_write8(a, m68kc.d[dn] >> 24); m68k_write8(a + 2, m68kc.d[dn] >> 16);
-                 m68k_write8(a + 4, m68kc.d[dn] >> 8); m68k_write8(a + 6, m68kc.d[dn]); }
-      else { m68k_write8(a, m68kc.d[dn] >> 8); m68k_write8(a + 2, m68kc.d[dn]); }
+      if (lng) { M68K_WR8(a, m68kc.d[dn] >> 24); M68K_WR8(a + 2, m68kc.d[dn] >> 16);
+                 M68K_WR8(a + 4, m68kc.d[dn] >> 8); M68K_WR8(a + 6, m68kc.d[dn]); }
+      else { M68K_WR8(a, m68kc.d[dn] >> 8); M68K_WR8(a + 2, m68kc.d[dn]); }
     } else {                                         /* mem -> reg */
-      if (lng) { uint32_t v = ((uint32_t)m68k_read8(a) << 24) | ((uint32_t)m68k_read8(a + 2) << 16)
-                 | ((uint32_t)m68k_read8(a + 4) << 8) | m68k_read8(a + 6); m68kc.d[dn] = v; }
-      else { uint32_t v = ((uint32_t)m68k_read8(a) << 8) | m68k_read8(a + 2); dreg_w(dn, 2, v); }
+      if (lng) { uint32_t v = ((uint32_t)M68K_RD8(a) << 24) | ((uint32_t)M68K_RD8(a + 2) << 16)
+                 | ((uint32_t)M68K_RD8(a + 4) << 8) | M68K_RD8(a + 6); m68kc.d[dn] = v; }
+      else { uint32_t v = ((uint32_t)M68K_RD8(a) << 8) | M68K_RD8(a + 2); dreg_w(dn, 2, v); }
     }
     return;
   }
@@ -584,9 +600,9 @@ static void op_bcd(uint16_t op, int sub){            /* ABCD (C) / SBCD (8) — 
 static void take_interrupt(int lvl){
   uint16_t oldsr = m68kc.sr;
   m68k_set_sr((uint16_t)((oldsr & ~(SR_T | SR_I)) | SR_S | ((uint16_t)lvl << 8)));
-  m68kc.a[7] -= 4; m68k_write32(m68kc.a[7], m68kc.pc);
-  m68kc.a[7] -= 2; m68k_write16(m68kc.a[7], oldsr);
-  m68kc.pc = m68k_read32((uint32_t)(24 + lvl) * 4);
+  m68kc.a[7] -= 4; M68K_WR32(m68kc.a[7], m68kc.pc);
+  m68kc.a[7] -= 2; M68K_WR16(m68kc.a[7], oldsr);
+  m68kc.pc = M68K_RD32((uint32_t)(24 + lvl) * 4);
   m68kc.stopped = 0;
 }
 
@@ -630,7 +646,7 @@ void m68k_step(void){
     case 0x6: {                                      /* Bcc/BRA/BSR */
       int cond = (op >> 8) & 0xF; int32_t disp = (int32_t)sxt8(op); uint32_t base = m68kc.pc;
       if ((op & 0xFF) == 0) disp = (int16_t)fetch16();   /* 68000: 0x00 => 16-bit disp; 0xFF is just -1 */
-      if (cond == 1) { m68kc.a[7] -= 4; m68k_write32(m68kc.a[7], m68kc.pc); m68kc.pc = base + disp; }  /* BSR */
+      if (cond == 1) { m68kc.a[7] -= 4; M68K_WR32(m68kc.a[7], m68kc.pc); m68kc.pc = base + disp; }  /* BSR */
       else if (cond_true(cond)) m68kc.pc = base + disp;
       break;
     }
