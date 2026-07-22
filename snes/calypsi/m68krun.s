@@ -18,11 +18,13 @@
 ;;; with N/V/Z/C/X taken from the 65816 ALU (item 5e); MOVE.B/.W/.L between
 ;;; {Dn,An,(An),(An)+} over the two-region RAM fast path (item 5f — one memory
 ;;; operand, clean RAM only); RTS (item 5g, the stack read/write reuse that RAM
-;;; path); and LSL/LSR/ROL/ROR.L Dn by an immediate count (item 5h). Punting:
-;;; mem->mem / ROM-source / odd MOVE, BSR.w and abs/disp/index JSR, AS/ROX and
-;;; register-count shifts, byte/word register ALU, everything with a fetched
-;;; extension word (CMPI, immediate ALU) — all fall to the slow path (also:
-;;; pending irq, STOP, fetch-cache miss): the full C m68k_step / m68k_exec.
+;;; path); LSL/LSR/ROL/ROR.L Dn by an immediate count (item 5h); and CMPI.W/.L
+;;; #imm,{Dn,(An),(An)+} (item 5i — the imm is peeked and the operand validated
+;;; before pc/An move). Punting: mem->mem / ROM-source / odd MOVE, BSR.w and
+;;; abs/disp/index JSR, AS/ROX and register-count shifts, byte/word register
+;;; ALU, byte CMPI, BTST#/immediate ALU and any op whose extension word
+;;; straddles the fetch window — all fall to the slow path (also: pending irq,
+;;; STOP, fetch-cache miss): the full C m68k_step / m68k_exec.
 ;;;
 ;;; Everything lives in the direct page (item 5a): m68kc (pc +64, sr +76,
 ;;; stopped|irq word +78; sizeof==80 packed, verified), the fetch cache,
@@ -114,10 +116,13 @@ d4a:          cmp     ##0xf0          ; $E0-$EF: register shifts (h_shift valida
               bcs     punt            ; $F0-$FF: line-F -> C
               jmp     long:h_shift
 d5:           cmp     ##0x10          ; $10-$3F: MOVE.b/.w/.l (h_move validates)
-              bcc     punt
+              bcc     d6
               cmp     ##0x40
               bcs     punt
               jmp     long:h_move
+d6:           cmp     ##0x0c          ; $0C: CMPI #imm,<ea> (h_cmpi validates)
+              bne     punt
+              jmp     long:h_cmpi
 
 punt:         lda     dp:.tiny cur_op
               jsl     long:m68k_exec  ; the C decoder (op in A)
@@ -1321,6 +1326,208 @@ sh_noz:       lda     dp:.tiny sr_tmp
               sta     dp:.tiny (m68kc+SR_OFF)
               jmp     long:tick
 
+;;; ---- $0C: CMPI #imm,<ea> — word/long (item 5i) ----
+;; Compare an immediate against Dn / (An) / (An)+ (operand read only). The
+;; immediate is peeked from the fetch window and the operand read (validating
+;; clean RAM) BEFORE anything commits, so a window straddle, an An/disp/abs
+;; operand, or a non-RAM operand punts with pc and An untouched. Byte CMPI
+;; punts (its V wants an 8-bit subtract). r = operand - imm; CMP flags (X kept).
+h_cmpi:       lda     dp:.tiny cur_op
+              and     ##0x00c0
+              cmp     ##0x0040
+              beq     cmpi_szw
+              cmp     ##0x0080
+              beq     cmpi_szl
+              jmp     long:punt
+cmpi_punt:    jmp     long:punt
+cmpi_szw:     lda     ##2
+              sta     dp:.tiny cmpi_immsz
+              bra     cmpi_go
+cmpi_szl:     lda     ##4
+              sta     dp:.tiny cmpi_immsz
+cmpi_go:      lda     dp:.tiny (m68kc+PC_HI)  ; the immediate must be in the window
+              cmp     dp:.tiny (mac_fetch_tag+2)
+              bne     cmpi_punt
+              lda     dp:.tiny (m68kc+PC_LO)
+              and     ##0xe000
+              cmp     dp:.tiny mac_fetch_tag
+              bne     cmpi_punt
+              lda     dp:.tiny (m68kc+PC_LO)
+              and     ##0x1fff
+              sta     dp:.tiny cmpi_off
+              lda     dp:.tiny cmpi_immsz     ; a long imm must not straddle the block
+              cmp     ##4
+              bne     cmpi_rdimm
+              lda     dp:.tiny cmpi_off
+              cmp     ##0x1ffd
+              bcs     cmpi_punt
+cmpi_rdimm:   ldy     dp:.tiny cmpi_off       ; peek the imm (no pc advance)
+              lda     [.tiny mac_fetch_base],y
+              xba
+              ldx     dp:.tiny cmpi_immsz
+              cpx     ##2
+              bne     cmpi_rdimm_l
+              sta     dp:.tiny s_lo           ; word
+              bra     cmpi_operand
+cmpi_rdimm_l: sta     dp:.tiny s_hi           ; long: high word
+              ldy     dp:.tiny cmpi_off
+              iny
+              iny
+              lda     [.tiny mac_fetch_base],y
+              xba
+              sta     dp:.tiny s_lo           ; long: low word
+cmpi_operand: lda     dp:.tiny cur_op
+              and     ##0x0038
+              sta     dp:.tiny cmpi_mode
+              beq     cmpi_op_dn              ; mode 0 = Dn
+              cmp     ##0x0010
+              beq     cmpi_op_mem
+              cmp     ##0x0018
+              beq     cmpi_op_mem
+              jmp     long:punt               ; An / disp / abs -> C
+cmpi_op_dn:   lda     dp:.tiny cur_op
+              and     ##0x0007
+              asl     a
+              asl     a
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              sta     dp:.tiny r_lo
+              lda     dp:.tiny cmpi_immsz
+              cmp     ##2
+              beq     cmpi_dn_done
+              lda     dp:.tiny (m68kc+2),x
+              sta     dp:.tiny r_hi
+cmpi_dn_done: jmp     long:cmpi_commit
+cmpi_op_mem:  lda     dp:.tiny cur_op
+              and     ##0x0007
+              asl     a
+              asl     a
+              clc
+              adc     ##32
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny (m68kc+2),x
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr
+              bcs     cmpi_om1
+              jmp     long:punt
+cmpi_om1:     ldy     ##0
+              lda     [.tiny eap],y
+              xba
+              sta     dp:.tiny r_lo           ; operand word (word: value; long: high)
+              lda     dp:.tiny cmpi_immsz
+              cmp     ##2
+              beq     cmpi_commit
+              lda     dp:.tiny r_lo           ; long: shift to high, read low @a+2
+              sta     dp:.tiny r_hi
+              lda     dp:.tiny mv_a_lo
+              clc
+              adc     ##2
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny mv_a_hi
+              adc     ##0
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr
+              bcs     cmpi_om2
+              jmp     long:punt
+cmpi_om2:     ldy     ##0
+              lda     [.tiny eap],y
+              xba
+              sta     dp:.tiny r_lo
+              lda     dp:.tiny mv_a_lo        ; restore a (for the increment)
+              sec
+              sbc     ##2
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny mv_a_hi
+              sbc     ##0
+              sta     dp:.tiny mv_a_hi
+cmpi_commit:  lda     dp:.tiny (m68kc+PC_LO)  ; validated: advance pc past the imm
+              clc
+              adc     dp:.tiny cmpi_immsz
+              sta     dp:.tiny (m68kc+PC_LO)
+              bcc     cmpi_c1
+              inc     dp:.tiny (m68kc+PC_HI)
+cmpi_c1:      lda     dp:.tiny cmpi_mode      ; (An)+ : A[reg] += immsz (no A7-byte case)
+              cmp     ##0x0018
+              bne     cmpi_sub
+              lda     dp:.tiny cur_op
+              and     ##0x0007
+              asl     a
+              asl     a
+              clc
+              adc     ##32
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              clc
+              adc     dp:.tiny cmpi_immsz
+              sta     dp:.tiny (m68kc+0),x
+              bcc     cmpi_sub
+              inc     dp:.tiny (m68kc+2),x
+cmpi_sub:     lda     dp:.tiny cmpi_immsz
+              cmp     ##2
+              bne     cmpi_sub_l
+              lda     dp:.tiny r_lo           ; word: r = operand - imm
+              sec
+              sbc     dp:.tiny s_lo
+              sta     dp:.tiny r_lo
+              stz     dp:.tiny cvflags
+              bcs     cmpiw_nc
+              lda     dp:.tiny cvflags
+              ora     ##0x0001
+              sta     dp:.tiny cvflags
+cmpiw_nc:     bvc     cmpiw_nv
+              lda     dp:.tiny cvflags
+              ora     ##0x0002
+              sta     dp:.tiny cvflags
+cmpiw_nv:     jmp     long:commit_cmp_w
+cmpi_sub_l:   lda     dp:.tiny r_lo           ; long: r = operand - imm
+              sec
+              sbc     dp:.tiny s_lo
+              sta     dp:.tiny r_lo
+              lda     dp:.tiny r_hi
+              sbc     dp:.tiny s_hi
+              sta     dp:.tiny r_hi
+              stz     dp:.tiny cvflags
+              bcs     cmpil_nc
+              lda     dp:.tiny cvflags
+              ora     ##0x0001
+              sta     dp:.tiny cvflags
+cmpil_nc:     bvc     cmpil_nv
+              lda     dp:.tiny cvflags
+              ora     ##0x0002
+              sta     dp:.tiny cvflags
+cmpil_nv:     jmp     long:commit_cmp_l
+;; commit_cmp_w: word CMP flags — N/Z from r_lo, V/C from cvflags, X kept.
+commit_cmp_w: lda     dp:.tiny (m68kc+SR_OFF)
+              and     ##0xfff0
+              sta     dp:.tiny sr_tmp
+              lda     dp:.tiny cvflags
+              and     ##0x0001
+              beq     ccw_noc
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0001
+              sta     dp:.tiny sr_tmp
+ccw_noc:      lda     dp:.tiny cvflags
+              and     ##0x0002
+              beq     ccw_nov
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0002
+              sta     dp:.tiny sr_tmp
+ccw_nov:      lda     dp:.tiny r_lo
+              beq     ccw_z
+              bpl     ccw_done
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0008
+              sta     dp:.tiny sr_tmp
+              bra     ccw_done
+ccw_z:        lda     dp:.tiny sr_tmp
+              ora     ##0x0004
+              sta     dp:.tiny sr_tmp
+ccw_done:     lda     dp:.tiny sr_tmp
+              sta     dp:.tiny (m68kc+SR_OFF)
+              jmp     long:tick
+
 ;;; ---- the 256-entry top-byte dispatch table (16-bit in-bank addresses) ----
 optab:
 
@@ -1349,3 +1556,6 @@ jsr_tgt_lo:   .space  2       ; JSR (An) target address (item 5g)
 jsr_tgt_hi:   .space  2
 shift_cnt:    .space  2       ; register-shift count + last-bit-out (item 5h)
 shift_c:      .space  2
+cmpi_immsz:   .space  2       ; CMPI operand/immediate size in bytes (item 5i)
+cmpi_off:     .space  2       ; CMPI immediate offset within the fetch window
+cmpi_mode:    .space  2       ; CMPI operand mode field

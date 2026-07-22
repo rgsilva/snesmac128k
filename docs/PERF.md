@@ -329,7 +329,7 @@ included; subtract ~21 for machine-only):
 Round total ≈ 1.08× — and the decode reorder favors LEA/JSR/RTS-dense real
 boot code beyond what the nop-heavy bench can show.
 
-## 9. Item 5: the hand-65816 core (5a–5h)
+## 9. Item 5: the hand-65816 core (5a–5i)
 
 The ladder, each rung parity- and CRC-gated:
 
@@ -343,6 +343,7 @@ The ladder, each rung parity- and CRC-gated:
 | 5f | **MOVE.B/.W/.L over the RAM fast path**: src/dst in {Dn,An,(An),(An)+}, one memory operand, clean RAM only (mem→mem, ROM/IO, odd, overlay-on, wider modes all punt) | `fbfill` **265 → 86**, `ram.b` 48→14, `ram.l` 55→18, `ram.w` 49→13 |
 | 5g | **RTS / BSR.b / JSR (An)** — the call/return set; the stack read (RTS) and write (BSR/JSR push) reuse the MOVE fast path (the stack is RAM) | gates via a new `calls` phase |
 | 5h | **LSL/LSR/ROL/ROR.L Dn, #cnt** — register shifts, long, immediate count (AS/ROX/register-count/byte/word/memory punt) | `shift` **61 → 13** |
+| 5i | **CMPI.W/.L #imm,{Dn,(An),(An)+}** — the immediate is peeked from the fetch window and the operand validated *before* pc/An move (window straddle, byte, An/disp/abs operand punt) | gates via a new `cmpi` phase |
 
 The all-native `nop` phase collapsed **23 → 6 frames — ~330 CPU cycles per
 covered instruction, ~4×**. With 5e the `alu` phase (ADD/CMP/ADDQ.L, register
@@ -390,7 +391,16 @@ run and splits the host↔SNES CRC.
 LSL/LSR/ROL/ROR are now nearly all-native): a small count loop does the 32-bit
 shift-by-1 in two 16-bit halves and captures the last bit shifted out for C.
 
-**Where item 5 goes next** (the handler set keeps growing): the ROM-source /
+5i adds **CMPI.W/.L** — but a histogram of the boot corrected a wrong guess: the
+RAM test's dominant `$0x` op is **BTST #imm** (~78k of the first 200k
+instructions), not CMPI (which the boot barely uses). So CMPI is validated by a
+dedicated `cmpi` bench phase rather than the boot, and it shares the
+peek-then-commit shape any fetched-extension-word op needs — the immediate is
+read and the operand validated before `pc`/`An` change, so a straddle or a
+non-RAM operand punts cleanly.
+
+**Where item 5 goes next** (the handler set keeps growing): **BTST #imm** (the
+boot's real hot op, and it reuses 5i's immediate fetch), the ROM-source /
 mem→mem MOVE (unlocks `copy` and the OS's ROM→RAM startup copies), byte/word
-sizes for the register ALU and shifts (plus AS/ROX), CMPI, and JSR with a
-fetched EA (abs/disp/PC-relative). Beyond that: SA-1 (M7).
+register ALU and shifts (plus AS/ROX), and JSR with a fetched EA. Beyond that:
+SA-1 (M7).

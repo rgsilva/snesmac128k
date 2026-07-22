@@ -109,6 +109,8 @@ class Emit:
         self.w(0x6100 | ((target - (self.here() + 2)) & 0xFF)); self.n()
     def rts(self):                   self.w(0x4E75); self.n()
     def jsr_an(self, an):            self.w(0x4E90 | an); self.n()  # JSR (An)
+    def cmpi_l(self, imm, dn):       self.w(0x0C80 | dn, imm >> 16, imm & 0xFFFF); self.n()  # CMPI.L #imm,Dn
+    def cmpi_w(self, imm, dn):       self.w(0x0C40 | dn, imm & 0xFFFF); self.n()             # CMPI.W #imm,Dn
 
     # ---- structured helpers ----
     def mark(self, num, name):       # end phase, start the next
@@ -227,6 +229,31 @@ def build():
     for _ in range(16):
         a.jsr_an(0)
     a.n(16 * 3)                            # each JSR call = 2 folds + the RTS
+
+    a.mark(14, "cmpi")
+    # Gate CMPI.L (the real boot barely uses it): MOVE #val,D1; CMPI #imm,D1;
+    # then BLT/BEQ/BCS/BGT fold the signed/zero/unsigned result into D7. A wrong
+    # N/Z/V/C flips a branch and changes the CRC. Pairs cover <,=,> plus the
+    # sign- and carry-overflow corners.
+    cpairs = [(0, 0), (1, 0), (0, 1), (5, 5),
+              (0x7FFFFFFF, 0x80000000), (0x80000000, 0x7FFFFFFF),
+              (0xFFFFFFFF, 0), (0, 0xFFFFFFFF), (0x12345678, 0x12345678)]
+    for val, imm in cpairs:
+        for cond in (13, 7, 5, 14):            # BLT, BEQ, BCS, BGT
+            a.move_l_imm_d(val, 1)
+            a.cmpi_l(imm, 1)
+            a.bcc_skip1(cond)
+            a.addq_l(1, 7)
+            a.rol_l_imm(1, 7)
+    wpairs = [(0, 0), (1, 0), (0, 1), (0x7FFF, 0x8000), (0x8000, 0x7FFF),
+              (0xFFFF, 0), (0, 0xFFFF)]        # CMPI.W path (commit_cmp_w)
+    for val, imm in wpairs:
+        for cond in (13, 7, 5, 14):
+            a.move_w_imm_d(val, 1)
+            a.cmpi_w(imm, 1)
+            a.bcc_skip1(cond)
+            a.addq_l(1, 7)
+            a.rol_l_imm(1, 7)
 
     a.mark(10, "crc")
     a.movea_l_imm(0x200, 0)                # 16 longs of the RAM buffer
