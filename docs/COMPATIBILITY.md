@@ -5,36 +5,36 @@
 **System 1.1 boots to the Finder desktop.** On the host (`runmac`) this is verified end
 to end — the 🍎 File/Edit/View/Special menu bar, the "System Disk" icon, and the Trash.
 On the SNES the *same* machine boots live (confirmed in Mesen): Happy Mac → "Welcome to
-Macintosh" → the desktop, given enough time.
-
-<p align="center">
-  <img src="assets/macboot_001.png" width="360" alt="'Welcome to Macintosh' on the SNES"><br>
-  <sub>"Welcome to Macintosh", live on the SNES — the ROM's <em>dsGreeting</em>, on the way to the desktop.</sub>
-</p>
-
-The boot you'll see:
-
-| stage | what it means |
-|---|---|
-| **Happy Mac** | power-on self-test passed; the ROM found the disk and is booting it |
-| **"Welcome to Macintosh"** | the System is loading (this is `SysError(40)` = `dsGreeting`, normal boot, not a crash) |
-| **Finder desktop** | you made it |
+Macintosh" → the desktop.
 
 The whole boot runs the *real* Apple ROM code — the File Manager, the Resource Manager,
 QuickDraw, the Finder — on top of the emulated 68000. snesmac only fakes the disk
 *hardware* (via the [HLE `.Sony` driver](INTERNALS.md#the-hle-sony-driver--how-it-reads-a-disk)),
-not the software.
+not the software. And once it's up, it isn't a screenshot — it's a computer you can
+click and type into.
 
-And once it's up, it's not a screenshot — it's a computer. With the d-pad and
-**A** you can pull down menus and launch desk accessories. Here is the Control
-Panel, opened and running on a Super Nintendo, volume slider, desktop-pattern
-editor and all:
+## Gallery
 
-<p align="center">
-  <img src="assets/macboot_004.png" width="360" alt="The Control Panel desk accessory, running on the SNES"><br>
-  <sub>The Control Panel, driven with a SNES controller. (The clock reads 1940:
-  no battery-backed clock chip in this "Mac". Authentic behavior.)</sub>
-</p>
+All captured from snesmac running in Mesen — every frame is the SNES's own PPU output.
+
+<table>
+<tr>
+<td align="center"><img src="assets/macboot_000.png" width="380"><br><sub>Happy Mac — power-on self-test passed, booting the disk</sub></td>
+<td align="center"><img src="assets/macboot_001.png" width="380"><br><sub>"Welcome to Macintosh" — the System loading (<code>dsGreeting</code>, a normal boot)</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="assets/macboot_002.png" width="380"><br><sub>The Finder desktop — you made it</sub></td>
+<td align="center"><img src="assets/macboot_003.png" width="380"><br><sub>The 🍎 menu, pulled down with the d-pad + A</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="assets/macboot_004.png" width="380"><br><sub>The Control Panel desk accessory, running — volume, pattern editor and all (clock reads 1940: no PRAM battery in this "Mac")</sub></td>
+<td align="center"><img src="assets/macboot_kbd.png" width="380"><br><sub>The on-screen keyboard (SELECT) — d-pad picks a key, A types; SPACE shown highlighted</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="assets/macboot_2disk.png" width="380"><br><sub>Two drives: a second disk image mounts as an external volume</sub></td>
+<td align="center"><img src="assets/macboot_zoom.png" width="380"><br><sub>Zoom-out (R): the whole 512×342 screen at once, four gray levels</sub></td>
+</tr>
+</table>
 
 ## What doesn't (yet)
 

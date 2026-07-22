@@ -91,9 +91,10 @@ dumps in `roms/` first. Full instructions in [docs/BUILDING.md](docs/BUILDING.md
 
 | doc | what |
 |---|---|
-| [docs/INTERNALS.md](docs/INTERNALS.md) | how a 68000 runs on a 65816; the machine model; the HLE `.Sony` driver; the SNES memory layout; parity testing |
+| [docs/INTERNALS.md](docs/INTERNALS.md) | how a 68000 runs on a 65816; the machine model; the HLE `.Sony`/mouse/keyboard; the SNES memory layout; parity testing |
+| [docs/PERF.md](docs/PERF.md) | the optimization campaign — measured cost breakdown, the hand-65816 core, fastboot, and the Apple-free benchmark ROM |
 | [docs/BUILDING.md](docs/BUILDING.md) | build the host tools + the SNES ROMs; bring your own ROM/disk |
-| [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | what boots, and the honest performance picture |
+| [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | what boots, the gallery, and the honest performance picture |
 | [docs/FUTURE.md](docs/FUTURE.md) | where this goes next — speed, input, SA-1 |
 | [docs/PROJECT.md](docs/PROJECT.md) | the original design brief + milestone log (M0–M7) |
 

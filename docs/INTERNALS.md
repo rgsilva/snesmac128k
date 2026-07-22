@@ -16,6 +16,15 @@ ways:
 A per-step **parity** check proves the two builds behave identically as a real ROM
 boots. So "what boots in `runmac` boots on the SNES."
 
+The single C core is still the source of truth for *behaviour*. Where the SNES build
+needs speed there's a hand-written 65816 layer over it — an inner-loop dispatcher, the
+memory fast paths, the video copy — but each of those either mirrors the C exactly
+(and is held to it by the same parity check) or falls back to the C for anything it
+doesn't handle. The optimization campaign that produced that layer — and got a cold
+boot from *hours* down to minutes — is its own document: **[PERF.md](PERF.md)**, with
+a measured cost breakdown, a ranked fix list, and a committable Apple-free benchmark
+ROM that scores every change. This file is the architecture; PERF.md is the speed.
+
 ---
 
 ## The 68000 core on a 65816
@@ -112,8 +121,25 @@ real VIA line (port B bit 3, low = pressed), so the Event Manager posts mouse-do
 usual and menus and clicks just work. (Validated on the host by clicking the 🍎 menu
 open; the SNES feeds it from the d-pad + A.)
 
-The core's `m68k_read*/write*` are `mac.c`'s bus decode, so the whole machine is just:
-`if (!sony_trap()) m68k_step();` per instruction, plus the VBL timer.
+**The keyboard (also HLE).** The real Mac keyboard is a serial protocol over a VIA
+shift register; snesmac skips it and injects at the *event* level. `mac_post_key(code,
+char)` queues one keyDown; the A-line hook (below) watches for the guest running an
+event-polling trap (`GetNextEvent`, `EventAvail`, `GetOSEvent`, `OSEventAvail`) with a
+key pending, and *piggybacks the ROM's own `_PostEvent`* — it pushes the poll's return
+address, sets `A0 = keyDown`, `D0 = (keycode << 8) | char`, and jumps to `_PostEvent`
+through the trap-dispatch table (the 64 KB ROM's is 512 compressed 16-bit entries at
+`$0400`, address = `ROMBase + entry*2`). `_PostEvent` returns straight back into
+re-running the poll, which now finds a genuine event in the queue. Verified on the host
+by asserting the keyDown lands in the Event Manager queue before any app reads it; the
+SNES drives it from an on-screen keyboard (SELECT, below).
+
+**Fetch once.** The core's `m68k_read*/write*` are `mac.c`'s bus decode. A naïve loop
+would fetch each opcode twice — once for the sony/keyboard trap check, once to execute —
+so instead the trap check is an **A-line hook** (`m68k_aline_hook`): `m68k_step()` does
+the single opcode fetch, and *only* on an `$Axxx` opcode calls the hook, which either
+services the trap (disk / keyboard) or declines to the normal line-A exception. The
+whole machine step is then `m68k_step()` plus the VBL/timer tick; on the SNES the batch
+entry point `mac_run(n)` runs that loop in hand 65816 (see PERF.md).
 
 ---
 
@@ -124,13 +150,13 @@ a variable-speed drive, with 6-and-2 GCR track encoding and per-zone sector coun
 snesmac **skips all of it** by emulating the disk at the *driver* level instead of the
 *hardware* level.
 
-`sony_trap()` runs before every instruction. It intercepts the Mac's Device Manager OS
-traps (opcode `$Axxx`, trap numbers `$02`–`$06` = Read/Write/Control/Status/KillIO) whose
-parameter block targets the floppy driver (`ioRefNum` −5, or −4 for the drive), and
-services them directly: a Read copies 512-byte sectors from the disk image at the
-requested `ioPosOffset`; a Status/Control is acknowledged. The ROM's own File Manager,
-Resource Manager, and boot code run for real on top of this — mount the volume, open the
-System file, load it, jump to it.
+`sony_trap()` is the A-line hook (so it runs only on `$Axxx` opcodes, not every
+instruction). It intercepts the Mac's Device Manager OS traps (trap numbers `$02`–`$06`
+= Read/Write/Control/Status/KillIO) whose parameter block targets the floppy driver
+(`ioRefNum` −5, or −4 for the drive), and services them directly: a Read copies
+512-byte sectors from the disk image at the requested `ioPosOffset`; a Status/Control
+is acknowledged. The ROM's own File Manager, Resource Manager, and boot code run for
+real on top of this — mount the volume, open the System file, load it, jump to it.
 
 Getting that to actually boot took three fixes, each found by tracing the ROM with a
 disassembler:
@@ -156,25 +182,42 @@ code in RAM → `_MountVol` reads the MDB (MFS signature `$D2D7`) and validates 
 allocation map → open and read the System file → `SysError(40)` = the *dsGreeting*
 "Welcome to Macintosh" box (normal boot, not a crash) → the Finder draws the desktop.
 
+**Two drives.** The Mac 128K has an internal drive and can take an external one. The
+drive the ROM is talking to comes from the IWM SELECT line, which `drive_sense()`
+honours: with no second image the external drive's sense lines read "nothing connected"
+and the ROM sees one drive; drop a 400 KB image at `roms/disk2_data.bin` and the
+external drive is real — the HLE dispatches each read on the parameter block's
+`ioVRefNum` (1 → the internal image, 2 → the external one) and sets each drive-queue
+entry's size per `dQDrive`. So a second volume — an apps disk — mounts on the desktop.
+(Before this the sense stub answered "disk present" for *both* drives and the HLE
+ignored the drive number, so the one image mounted twice: the "two System Disks" bug.)
+
 ---
 
 ## Mapping a Macintosh into a cartridge
 
 On the host, the Mac's RAM is a `uint8_t[131072]` array and the ROM is a pointer. On the
 SNES neither works — a 128 KB array busts Calypsi's object-size limit, and 128 KB won't
-fit in WRAM beside the runtime. So `mac.c` reaches memory through four macros
-(`RAM_RD/RAM_WR/ROM_RD/DISK_RD`) that are plain array access on the host and, when built
-`-DMAC_SNES`, call into a small backend (`snes/macmem.c`):
+fit in WRAM beside the runtime. So `mac.c` reaches memory through macros
+(`RAM_RD/RAM_WR/ROM_RD/DISK_RD`, plus 16-bit variants) that are plain array access on
+the host and, built `-DMAC_SNES`, are `static inline` accessors in `snes/macmem.h` —
+inline so the address arithmetic lands straight in the bus decode with no call per
+access.
 
-- **RAM → cartridge SRAM.** The Mac's 128 KB lives in HiROM cart SRAM, which the SNES
-  exposes as 8 KB windows at banks `$20`–`$2F`, offset `$6000`–`$7FFF`. Mac address *a*
-  maps to bank `$20 + (a >> 13)`, offset `$6000 + (a & $1FFF)`, reached by a 24-bit far
-  pointer.
-- **ROM + disk → cartridge ROM.** The 64 KB Mac ROM and the 400 KB floppy image are
-  appended to the cart ROM at fixed byte offsets by `raw2sfc.py`. HiROM maps SNES
-  `$C00000 + N` linearly to ROM byte *N*, so the ROM sits at `$C80000` and the disk at
-  `$D00000`, read through far pointers. The cart is a 2 MB HiROM (its own header,
-  `macheader.s`, so the embedded blobs aren't mirrored over the code).
+- **RAM → half WRAM, half cartridge SRAM.** The Mac's low 8 KB (`$0000`–`$1FFF`) lives
+  in one fixed cart-SRAM window; the rest (`$2000`–`$1FFFF`) is **WRAM at `$7E0000 + a`,
+  linear** — one compare picks the region, then a constant-base far access, no window
+  math. (An earlier design put *all* 128 KB in 8 KB SRAM windows and paid a bank
+  computation on every byte; PERF.md item H replaced it. The runtime is squeezed under
+  `$2000` so WRAM `$7E2000+` is free for the Mac.)
+- **ROM + disks → cartridge ROM.** The 64 KB Mac ROM, the 400 KB floppy image, the
+  fastboot warm state (below), and the optional second disk are appended to the cart at
+  fixed byte offsets by `raw2sfc.py`. HiROM maps SNES `$C00000 + N` linearly to ROM byte
+  *N*, so the ROM sits at `$C80000`, disk 1 at `$D00000`, the warm state at `$D80000`,
+  disk 2 at `$E00000`, all read through far pointers. The cart is a 4 MB HiROM with its
+  own header (`macheader.s`) so the embedded blobs aren't mirrored over the code, and it
+  runs **FastROM** (map mode `$31` + `MEMSEL`; SRAM is reached through its fast `$A0`
+  mirror), 6 master clocks per access instead of 8.
 
 Two 65816-specific gotchas, both expensive to find:
 
@@ -182,39 +225,70 @@ Two 65816-specific gotchas, both expensive to find:
   the 16-bit-int ABI, silently corrupting a 32-bit address or an 8-bit value — it looked
   like a broken SRAM write for an hour.
 - **Cart SRAM is battery-backed**, so Mesen persists it between runs; `mac_init` wipes
-  RAM on start, so the machine boots fresh every time regardless.
+  RAM on start (a 65816 `MVN` block fill), so the machine boots fresh every time.
 
 ### The display
 
-The Mac framebuffer is 512×342, 1 bit per pixel, at `$1A700` in RAM. A set bit is black.
-`macboot.c` shows it the same way snes86 shows CGA text: as SNES tiles. Every so many
-instructions it rebuilds a 256×224 centre crop into a WRAM tile buffer — each Mac
-framebuffer byte becomes the plane-0 byte of a 2bpp tile (Mac 1 = colour 1 = black,
-plane 1 = 0) — and DMAs it to VRAM. A two-colour palette (white / black) and an identity
-tilemap complete a Mode-0 background. Only a 256×224 window is shown — the SNES can
-address just 1024 tiles per background, and the full 512×342 screen is 2752 unique tiles
-— so the window **pans** (hold the L shoulder and use the d-pad, read from the auto-read
-joypad; the d-pad alone is reserved for the mouse). To stay responsive on the slow CPU,
-the per-refresh framebuffer read computes
-the SRAM window pointer once per row (rows align to the 8 KB windows) and reads across it
-with plain indexing, rather than the full window math per byte. A fit-to-screen
-(downscaled) mode is still on the roadmap ([FUTURE.md](FUTURE.md)).
+The Mac framebuffer is 512×342, 1 bit per pixel, at `$1A700` in RAM (now linear WRAM). A
+set bit is black. `macboot.c` shows it the same way snes86 shows CGA text: as SNES
+tiles. It rebuilds a 256×224 window into a tile buffer — each Mac framebuffer byte
+becomes the plane-0 byte of a 2bpp tile (Mac 1 = colour 1 = black) — and DMAs it to
+VRAM, behind a two-colour palette and an identity Mode-0 tilemap. The rebuild is hand
+65816 (`calypsi/tilecopy.s`, `tile_rows`): fully-unrolled strided copies straight from
+WRAM into the SRAM tile buffer, ~13× cheaper than the original C loop, so panning and
+the mouse feel responsive despite the slow CPU.
+
+Only a 256×224 window is shown — the SNES addresses just 1024 tiles per background, and
+the whole screen is 2752 — so there are two views:
+
+- **1:1 pan** (default): hold the **L** shoulder and the **d-pad** slides the window
+  (the d-pad alone is the mouse).
+- **zoom-out** (**R** toggles): the *whole* 512×342 screen at once, 2×2-downscaled to
+  256×171 with **four gray levels**. Because the 1:1 view is 1-bit, the second bitplane
+  of the 2bpp mode and two spare palette entries were free; each output pixel maps its
+  2×2 block's black-count (0–4) to white / light / dark / black, so the dithered desktop
+  averages to a real gray instead of collapsing. It's table-driven (`tools/mkzoomtab.py`
+  → `maczoom_tab.h`), a second renderer into the same tile buffer.
+
+**The on-screen keyboard** is a second background (BG2) across the bottom five tile
+rows: **SELECT** toggles it, the **d-pad** moves the highlighted key, **A** presses it
+(calling `mac_post_key`), and a SHIFT key gives the shifted characters. Its tiles and
+layout are generated (`tools/mkkbd.py` → `mackbd_tab.h`, from a vendored public-domain
+8×8 font). Two SNES gotchas shaped it: VRAM is writable only during blank (the tilemap
+update is force-blanked, like the DMA), and BG2 ignores the tilemap palette bits in
+Mode 0 — so the selected-key highlight uses *inverted tiles* rather than a palette swap.
 
 ---
 
 ## `runmac` — the host emulator
 
 `core-c/src/runmac.c` is the same machine model (`mac.c` + `m68k.c`) on your desktop,
-driven from `main()`: load the ROM, attach a disk image, step, and dump the framebuffer
-as a PBM. It's the development mirror — reproduce a boot problem with a disassembler and
-traces in milliseconds, no SNES layer in the way — and it's where every HLE fix above was
-found before it ever ran on Calypsi.
+driven from `main()`: load the ROM, attach a disk image (and `roms/disk2_data.bin` if
+present), step, and dump the framebuffer as a PBM. It's the development mirror —
+reproduce a boot problem with a disassembler and traces in milliseconds, no SNES layer
+in the way — and it's where every HLE fix above was found before it ever ran on Calypsi.
+
+### Fastboot
+
+The 128K ROM burns ~1.5 million instructions before its first disk read — the power-on
+RAM test, hardware init, and the boot-chime delay loops — none of it watchable. So
+`make macboot` builds with `FASTBOOT=1` by default: a host tool boots *your* ROM up to
+the instruction about to issue that first read and dumps the whole machine (registers,
+VIA, all 128 KB of RAM); the live boot embeds that state in the cart and **teleports**
+to it when it first reaches the RAM-test entry PC. The result is bit-identical to having
+waited — verified by comparing framebuffer and register hashes against a cold boot at
+several checkpoints — minus the wait, so the Happy Mac appears in moments. Build
+`FASTBOOT=0` for the purist power-on. The warm state is regenerated from your own ROM at
+build time and never committed. (Details, and the `_BlockMove` HLE that rides with it,
+in [PERF.md](PERF.md).)
 
 ---
 
 ## Parity testing
 
-Two independent checks, and (as in snes86) don't conflate them.
+Two independent checks, and (as in snes86) don't conflate them. (A third, the
+benchmark ROM's host-vs-SNES CRC, is an *Apple-free* semantic gate that also times
+every optimization — see [PERF.md](PERF.md).)
 
 ### 1. The core vs the vectors
 
@@ -248,8 +322,14 @@ cd snes && make test-macparity      # boot N steps on the SNES, diff vs the host
 | you want… | start at |
 |---|---|
 | the 68000 core: dispatch, ALU, exceptions | `core-c/src/m68k.c` (+ `m68k.h`) |
-| the Mac machine, VIA, overlay, the HLE `.Sony` driver | `core-c/src/mac.c` |
+| the Mac machine, VIA, overlay, HLE `.Sony`/mouse/keyboard | `core-c/src/mac.c` |
 | the host emulator / development mirror | `core-c/src/runmac.c` |
-| the SNES memory backend (SRAM/ROM) | `snes/macmem.c` |
-| the live-boot display | `snes/macboot.c` |
+| the SNES memory backend (WRAM/SRAM/ROM, inline) | `snes/macmem.h`, `snes/m68kbus.h` |
+| the hand-65816 inner loop + native handlers | `snes/calypsi/m68krun.s` |
+| the hand-65816 video/RAM copy loops | `snes/calypsi/tilecopy.s` |
+| the live-boot display, pan/zoom, on-screen keyboard | `snes/macboot.c` |
+| the on-screen keyboard / zoom lookup tables | `snes/tools/mkkbd.py`, `mkzoomtab.py` |
 | host↔SNES parity | `snes/macparity.c`, `core-c/tests/macgenref.c` |
+| the benchmark ROM + timing harness | `bench/mkbenchrom.py`, `snes/macbench.c` |
+| the fastboot warm-state generator | `core-c/tests/macfastboot_gen.c` |
+| the whole performance story | [PERF.md](PERF.md) |

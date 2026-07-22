@@ -79,10 +79,11 @@ make test-macparity   # build + run the parity check in Mesen (expects "PARITY O
 make test-macboot     # build + run the live boot in Mesen
 ```
 
-`raw2sfc.py` embeds your `roms/mac128k.rom` at cart offset `$080000` and
-`roms/sys11_data.bin` at `$100000`, pads to a 2 MB HiROM, and fixes the header checksum.
-The resulting `.sfc` contains Apple ROM/disk data, so **don't redistribute it** — it's
-build output, and `build/` is gitignored.
+`raw2sfc.py` embeds your `roms/mac128k.rom` at cart offset `$080000`, `roms/sys11_data.bin`
+at `$100000`, the generated fastboot warm state at `$180000`, and (if present) a second
+disk at `$200000`; it pads to a 4 MB HiROM and fixes the header checksum. The resulting
+`.sfc` contains Apple ROM/disk data, so **don't redistribute it** — it's build output,
+and `build/` is gitignored.
 
 The parity ROM defaults to a small step count; run more of the boot with
 `make macparity MACP_N=100000` (bigger N = a longer, slower check).

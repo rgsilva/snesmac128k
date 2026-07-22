@@ -96,9 +96,18 @@ Three facts make it feasible, and all three are load-bearing:
   hi-res + a live on-SNES boot are later refinements.)
 - **M5 — Disk HLE → desktop. ✓** Trap `.Sony`, serve sectors from the image.
   System 1.1 boots to the Finder desktop (host). *The* milestone — see below.
-- **M6 — Mouse.** SNES pad → mouse move/click via VIA/SCC HLE. Keyboard stretch.
-- **M7 — Perf + SA-1 + release.** SA-1 for linear RAM + 3× speed; asm hot-paths;
-  BYO-ROM public build + copyright scrub (snes86 release-packaging playbook).
+- **M4b — the live machine on the SNES. (done — parity ✓.)** `mac.c` built
+  `-DMAC_SNES` runs the whole machine on the real 65816; `macboot.c` boots it
+  live (Happy Mac → Welcome → Finder). See result below.
+- **M6 — Input. (done.)** SNES pad → mouse move/click (low-mem-globals + VIA-line
+  HLE) and an on-screen keyboard (SELECT; keyDown injected via the ROM's own
+  `_PostEvent`). Plus the display UX: pan (L), zoom-out (R), and an optional
+  external drive (a second disk image). See [COMPATIBILITY.md](COMPATIBILITY.md).
+- **M7 — Perf + SA-1 + release.** *Perf largely done* (see [PERF.md](PERF.md)):
+  ~6× faster to the desktop via fetch-once, FastROM, a two-region memory model, a
+  hand-65816 inner loop + native handlers, and a fastboot teleport past the RAM
+  test — all scored by a committable Apple-free benchmark ROM. *Still open:* the
+  SA-1 coprocessor (linear RAM + ~3× clock) and a BYO-ROM public build.
 
 ## M1 — validation result
 
