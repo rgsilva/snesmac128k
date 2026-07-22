@@ -38,6 +38,15 @@ python3 core-c/tests/dc42.py System-1.1.image roms/sys11_data.bin
 `dc42.py` strips the DiskCopy header and tags and writes the 800 × 512-byte data fork.
 Sector 0's `4C4B` (`'LK'`) signature confirms it's bootable.
 
+## A second disk (optional)
+
+Any additional 400 KB raw image dropped at `roms/disk2_data.bin` — same
+DiskCopy-4.2 → raw pipeline as the System disk — is embedded in the cart
+(which grows to 4 MB) and served as the **external drive**: the Finder mounts
+it as a second volume on the desktop. An apps disk (MacPaint, MacWrite) from
+the same archives is the natural choice. Remove the file and rebuild to go
+back to one drive.
+
 ## Host: the core, the emulator, and validation
 
 ```sh
@@ -94,5 +103,3 @@ make parity           # M2: the 68000 core alone, host<->SNES parity on a direct
 make macvideo         # M4: a captured Mac framebuffer displayed on the SNES (static)
 make hello            # M0: the build/plumbing spike
 ```
-
-(see COMPATIBILITY.md for the optional second disk)
