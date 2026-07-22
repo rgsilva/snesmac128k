@@ -13,12 +13,15 @@
 ;;;
 ;;; Native coverage: NOP; MOVEQ (all 16 top bytes — the C decodes bit 8 as
 ;;; don't-care, mirrored here); the full Bcc/BRA set (all 14 conditions +
-;;; BRA; BSR punts); ADDQ/SUBQ #d,An (no flags); DBRA (DBF); and the long
+;;; BRA; BSR punts); ADDQ/SUBQ #d,An (no flags); DBRA (DBF); the long
 ;;; register-direct ALU — ADD/SUB/CMP/AND/OR.L Dn,Dn and ADDQ/SUBQ.L #d,Dn,
-;;; with N/V/Z/C/X taken from the 65816 ALU (item 5e). Slow path (pending irq,
-;;; STOP, fetch-cache miss, extension word beyond the cached window): the full
-;;; C m68k_step / m68k_exec. Still punting — next candidates: byte/word ALU,
-;;; the memory-EA forms (MOVE/CMPI/...), and RTS/JSR.
+;;; with N/V/Z/C/X taken from the 65816 ALU (item 5e); and MOVE.W/.L between
+;;; {Dn,An,(An),(An)+} over the two-region RAM fast path (item 5f — one memory
+;;; operand, clean RAM only; mem->mem, MOVE.B, ROM/IO, odd, overlay-on and the
+;;; wider addressing modes all punt). Slow path (pending irq, STOP, fetch-cache
+;;; miss, extension word beyond the cached window): the full C m68k_step /
+;;; m68k_exec. Next candidates: byte/word ALU, MOVE.B and ROM-source MOVE,
+;;; CMPI, RTS/JSR.
 ;;;
 ;;; Everything lives in the direct page (item 5a): m68kc (pc +64, sr +76,
 ;;; stopped|irq word +78; sizeof==80 packed, verified), the fetch cache,
@@ -32,6 +35,7 @@
               .extern mac_fetch_tag, mac_fetch_base
               .extern mac_via_t1, mac_via_t2, mac_vbl_timer
               .extern m68k_exec, m68k_step, mac_vbl_fire
+              .extern mac_overlay_on          ; item 5f: RAM fast path for MOVE
 
 PC_LO         .equ    64              ; m68k_t offsets (packed, verified)
 PC_HI         .equ    66
@@ -101,10 +105,15 @@ d3:           cmp     ##0x4e          ; $4E: NOP (RTS/JSR/... punt)
               bne     d4
               jmp     long:h_4e
 d4:           cmp     ##0x80          ; $80-$DF: register-direct ALU
-              bcc     punt            ; (h_alu validates: opmode 2 long, mode 0 Dn)
+              bcc     d5              ; (h_alu validates: opmode 2 long, mode 0 Dn)
               cmp     ##0xe0
               bcs     punt
               jmp     long:h_alu
+d5:           cmp     ##0x10          ; $10-$3F: MOVE.b/.w/.l (h_move validates)
+              bcc     punt
+              cmp     ##0x40
+              bcs     punt
+              jmp     long:h_move
 
 punt:         lda     dp:.tiny cur_op
               jsl     long:m68k_exec  ; the C decoder (op in A)
@@ -685,6 +694,303 @@ cl_noz:       lda     dp:.tiny sr_tmp
               sta     dp:.tiny (m68kc+SR_OFF)
               jmp     long:tick
 
+;;; ---- $10-$3F: MOVE.W / MOVE.L, RAM fast path (item 5f) ----
+;; src/dst in {Dn, An, (An), (An)+}, at most one memory operand (mem->mem
+;; punts), clean RAM only (overlay off, addr < $400000, even): everything else
+;; -> C. MOVE.B punts (a byte store needs an 8-bit write). MOVE flags = logic
+;; (N/Z from the value, V=C=0, X kept); dst An = MOVEA (sign-extend .W, no
+;; flags). Word memory is big-endian via xba; long = two word accesses, each
+;; region-checked (the $1FFF/$2000 seam and the 64 KB bank edge fall out per
+;; word, exactly as the C's rd16/rd16 does).
+h_move:       lda     dp:.tiny cur_op
+              xba
+              and     ##0x00f0
+              cmp     ##0x0020
+              beq     mv_szl
+              cmp     ##0x0030
+              beq     mv_szw
+              jmp     long:punt       ; $1x MOVE.B -> C
+mv_szl:       lda     ##4
+              sta     dp:.tiny mv_size
+              bra     mv_dec
+mv_szw:       lda     ##2
+              sta     dp:.tiny mv_size
+mv_dec:       lda     dp:.tiny cur_op
+              and     ##0x0038        ; src mode field (bits 5-3)
+              sta     dp:.tiny mv_smode
+              cmp     ##0x0020
+              bcs     mv_punt         ; src mode >= 4 (disp/index/abs/imm) -> C
+              lda     dp:.tiny cur_op
+              and     ##0x01c0        ; dst mode field (bits 8-6)
+              sta     dp:.tiny mv_dmode
+              cmp     ##0x0100
+              bcs     mv_punt         ; dst mode >= 4 -> C
+              lda     dp:.tiny mv_smode       ; mem->mem? both operands in RAM -> C
+              cmp     ##0x0010
+              bcc     mv_rd           ; src is a register: fine
+              lda     dp:.tiny mv_dmode
+              cmp     ##0x0080
+              bcc     mv_rd           ; src mem, dst reg: fine
+              jmp     long:punt       ; mem -> mem: C
+mv_punt:      jmp     long:punt
+;; ---- read source into mv_val_lo/hi ----
+mv_rd:        lda     dp:.tiny mv_smode
+              bne     mv_rd_1
+              lda     dp:.tiny cur_op ; src Dn
+              and     ##0x0007
+              asl     a
+              asl     a
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              sta     dp:.tiny mv_val_lo
+              lda     dp:.tiny (m68kc+2),x
+              sta     dp:.tiny mv_val_hi
+              jmp     long:mv_wr
+mv_rd_1:      cmp     ##0x0008
+              bne     mv_rd_mem
+              lda     dp:.tiny cur_op ; src An
+              and     ##0x0007
+              asl     a
+              asl     a
+              clc
+              adc     ##32
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              sta     dp:.tiny mv_val_lo
+              lda     dp:.tiny (m68kc+2),x
+              sta     dp:.tiny mv_val_hi
+              jmp     long:mv_wr
+mv_rd_mem:    lda     dp:.tiny cur_op ; src (An)/(An)+ : a = A[sreg]
+              and     ##0x0007
+              asl     a
+              asl     a
+              clc
+              adc     ##32
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny (m68kc+2),x
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr
+              bcc     mv_punt          ; not clean RAM
+              ldy     ##0
+              lda     [.tiny eap],y    ; big-endian word @a
+              xba
+              ldx     dp:.tiny mv_size
+              cpx     ##2
+              bne     mv_rd_meml
+              sta     dp:.tiny mv_val_lo      ; word
+              bra     mv_rd_mem_inc
+mv_rd_meml:   sta     dp:.tiny mv_val_hi      ; long: high word
+              lda     dp:.tiny mv_a_lo
+              clc
+              adc     ##2
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny mv_a_hi
+              adc     ##0
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr
+              bcc     mv_punt
+              ldy     ##0
+              lda     [.tiny eap],y           ; low word @a+2
+              xba
+              sta     dp:.tiny mv_val_lo
+              lda     dp:.tiny mv_a_lo        ; restore a for the increment
+              sec
+              sbc     ##2
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny mv_a_hi
+              sbc     ##0
+              sta     dp:.tiny mv_a_hi
+mv_rd_mem_inc: lda    dp:.tiny mv_smode
+              cmp     ##0x0018
+              bne     mv_wr           ; not (An)+ : done reading
+              lda     dp:.tiny cur_op ; (An)+ : A[sreg] += size
+              and     ##0x0007
+              asl     a
+              asl     a
+              clc
+              adc     ##32
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              clc
+              adc     dp:.tiny mv_size
+              sta     dp:.tiny (m68kc+0),x
+              bcc     mv_wr
+              inc     dp:.tiny (m68kc+2),x
+;; ---- write dst from mv_val_lo/hi ----
+mv_wr:        lda     dp:.tiny mv_dmode
+              bne     mv_wr_1
+              lda     dp:.tiny cur_op ; dst Dn
+              xba
+              and     ##0x000e
+              asl     a
+              tax
+              ldy     dp:.tiny mv_size
+              cpy     ##2
+              bne     mv_wr_dnl
+              lda     dp:.tiny mv_val_lo      ; word: low half only
+              sta     dp:.tiny (m68kc+0),x
+              jmp     long:mv_flags
+mv_wr_dnl:    lda     dp:.tiny mv_val_lo      ; long
+              sta     dp:.tiny (m68kc+0),x
+              lda     dp:.tiny mv_val_hi
+              sta     dp:.tiny (m68kc+2),x
+              jmp     long:mv_flags
+mv_wr_1:      cmp     ##0x0040
+              bne     mv_wr_mem
+              lda     dp:.tiny cur_op ; dst An = MOVEA (no flags)
+              xba
+              and     ##0x000e
+              asl     a
+              clc
+              adc     ##32
+              tax
+              ldy     dp:.tiny mv_size
+              cpy     ##2
+              bne     mv_wr_anl
+              lda     dp:.tiny mv_val_lo      ; MOVEA.W: sign-extend to 32
+              sta     dp:.tiny (m68kc+0),x
+              bit     ##0x8000
+              bne     mv_wr_anwn
+              stz     dp:.tiny (m68kc+2),x
+              jmp     long:tick
+mv_wr_anwn:   lda     ##0xffff
+              sta     dp:.tiny (m68kc+2),x
+              jmp     long:tick
+mv_wr_anl:    lda     dp:.tiny mv_val_lo
+              sta     dp:.tiny (m68kc+0),x
+              lda     dp:.tiny mv_val_hi
+              sta     dp:.tiny (m68kc+2),x
+              jmp     long:tick
+mv_wr_mem:    lda     dp:.tiny cur_op ; dst (An)/(An)+ : a = A[dreg]
+              xba
+              and     ##0x000e
+              asl     a
+              clc
+              adc     ##32
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny (m68kc+2),x
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr             ; validate a (before any write)
+              bcc     mv_punt3
+              ldx     dp:.tiny mv_size
+              cpx     ##2
+              beq     mv_wr_word
+              lda     dp:.tiny mv_a_lo        ; long: validate a+2 too
+              clc
+              adc     ##2
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny mv_a_hi
+              adc     ##0
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr
+              bcc     mv_punt3
+              lda     dp:.tiny mv_val_lo      ; write low word @a+2 (eap for a+2)
+              xba
+              ldy     ##0
+              sta     [.tiny eap],y
+              lda     dp:.tiny mv_a_lo        ; back to a
+              sec
+              sbc     ##2
+              sta     dp:.tiny mv_a_lo
+              lda     dp:.tiny mv_a_hi
+              sbc     ##0
+              sta     dp:.tiny mv_a_hi
+              jsl     long:mv_ptr             ; (clean already; carry ignored)
+              lda     dp:.tiny mv_val_hi      ; write high word @a
+              xba
+              ldy     ##0
+              sta     [.tiny eap],y
+              bra     mv_wr_mem_inc
+mv_punt3:     jmp     long:punt
+mv_wr_word:   lda     dp:.tiny mv_val_lo
+              xba
+              ldy     ##0
+              sta     [.tiny eap],y
+mv_wr_mem_inc: lda    dp:.tiny mv_dmode
+              cmp     ##0x00c0
+              bne     mv_flags        ; not (An)+
+              lda     dp:.tiny cur_op ; (An)+ : A[dreg] += size
+              xba
+              and     ##0x000e
+              asl     a
+              clc
+              adc     ##32
+              tax
+              lda     dp:.tiny (m68kc+0),x
+              clc
+              adc     dp:.tiny mv_size
+              sta     dp:.tiny (m68kc+0),x
+              bcc     mv_flags
+              inc     dp:.tiny (m68kc+2),x
+;; ---- flags: MOVE = logic (N/Z from value, V=C=0, X kept). MOVEA jmp'd tick. ----
+mv_flags:     lda     dp:.tiny (m68kc+SR_OFF)
+              and     ##0xfff0
+              sta     dp:.tiny sr_tmp
+              ldx     dp:.tiny mv_size
+              cpx     ##2
+              bne     mv_fl_long
+              lda     dp:.tiny mv_val_lo      ; word
+              beq     mv_fl_z
+              bpl     mv_fl_done
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0008
+              sta     dp:.tiny sr_tmp
+              bra     mv_fl_done
+mv_fl_long:   lda     dp:.tiny mv_val_hi
+              bpl     mv_fl_lz
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0008
+              sta     dp:.tiny sr_tmp
+mv_fl_lz:     lda     dp:.tiny mv_val_lo
+              ora     dp:.tiny mv_val_hi
+              bne     mv_fl_done
+mv_fl_z:      lda     dp:.tiny sr_tmp
+              ora     ##0x0004
+              sta     dp:.tiny sr_tmp
+mv_fl_done:   lda     dp:.tiny sr_tmp
+              sta     dp:.tiny (m68kc+SR_OFF)
+              jmp     long:tick
+
+;; mv_ptr: mv_a_lo/hi (Mac addr) -> eap (24-bit SNES ptr); carry set if clean
+;; RAM (overlay off, addr < $400000). Caller guarantees even for word/long.
+;; RAM is two regions (macmem.h): >= $2000 -> $7E0000+off (linear, banks
+;; $7E/$7F); < $2000 -> $A06000+off (the fast bank-$20 mirror).
+mv_ptr:       lda     dp:.tiny mac_overlay_on
+              bne     mv_ptr_no
+              lda     dp:.tiny mv_a_hi
+              and     ##0x00ff
+              cmp     ##0x0040
+              bcs     mv_ptr_no               ; >= $400000: ROM / I/O
+              lda     dp:.tiny mv_a_hi
+              and     ##0x0001
+              bne     mv_ptr_hi               ; bit16 set -> offset >= $10000
+              lda     dp:.tiny mv_a_lo
+              cmp     ##0x2000
+              bcc     mv_ptr_lo
+mv_ptr_hi:    lda     dp:.tiny mv_a_lo
+              sta     dp:.tiny eap
+              lda     dp:.tiny mv_a_hi
+              and     ##0x0001
+              clc
+              adc     ##0x007e
+              sta     dp:.tiny (eap+2)
+              sec
+              rtl
+mv_ptr_lo:    lda     dp:.tiny mv_a_lo
+              clc
+              adc     ##0x6000
+              sta     dp:.tiny eap
+              lda     ##0x00a0
+              sta     dp:.tiny (eap+2)
+              sec
+              rtl
+mv_ptr_no:    clc
+              rtl
+
 ;;; ---- the 256-entry top-byte dispatch table (16-bit in-bank addresses) ----
 optab:
 
@@ -699,3 +1005,13 @@ r_lo:         .space  2
 r_hi:         .space  2
 cvflags:      .space  2       ; bit0 = 68000 C, bit1 = V (as captured)
 sr_tmp:       .space  2
+;; MOVE (item 5f) scratch: size in bytes, masked mode fields, mem address,
+;; 24-bit SNES pointer, the moved value
+mv_size:      .space  2
+mv_smode:     .space  2
+mv_dmode:     .space  2
+mv_a_lo:      .space  2
+mv_a_hi:      .space  2
+eap:          .space  4
+mv_val_lo:    .space  2
+mv_val_hi:    .space  2

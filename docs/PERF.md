@@ -329,7 +329,7 @@ included; subtract ~21 for machine-only):
 Round total ≈ 1.08× — and the decode reorder favors LEA/JSR/RTS-dense real
 boot code beyond what the nop-heavy bench can show.
 
-## 9. Item 5: the hand-65816 core (5a–5e)
+## 9. Item 5: the hand-65816 core (5a–5f)
 
 The ladder, each rung parity- and CRC-gated:
 
@@ -340,6 +340,7 @@ The ladder, each rung parity- and CRC-gated:
 | 5c | **`calypsi/m68krun.s`**: the per-instruction skeleton in ~30 dp-addressed instructions (gate, fetch-cache hit + `xba`, PC bump, dispatch; slow path = the full C step, no sync needed — no private state) | 649 |
 | 5d | **native handlers** (exact flag-for-flag C mirrors, punt-before-mutate): NOP, MOVEQ×16, BRA.b, BNE.b, BEQ.b, DBRA | **615** |
 | 5e | **the branch + register-ALU set**: the *full* Bcc (all 14 conditions + BRA), ADDQ/SUBQ #d,An (no flags), and the long register-direct ALU — ADD/SUB/CMP/AND/OR.L Dn,Dn and ADDQ/SUBQ.L #d,Dn | `alu` **49 → 19** |
+| 5f | **MOVE.W/.L over the RAM fast path**: src/dst in {Dn,An,(An),(An)+}, one memory operand, clean RAM only (mem→mem, MOVE.B, ROM/IO, odd, overlay-on, wider modes all punt) | `fbfill` **265 → 84**, `ram.l` 55→17, `ram.w` 49→14 |
 
 The all-native `nop` phase collapsed **23 → 6 frames — ~330 CPU cycles per
 covered instruction, ~4×**. With 5e the `alu` phase (ADD/CMP/ADDQ.L, register
@@ -363,7 +364,18 @@ the CRC). Both gates: green. (The `branch` phase changed the golden CRC to
 `482acf71`, and exposed that `test-bench`'s compare was case-sensitive against a
 lowercase SNES / uppercase host hex — now normalised.)
 
-**Where item 5 goes next** (the handler set keeps growing): byte/word sizes for
-the ALU just added, then the memory-EA forms — MOVE (the most common op in real
-code) and CMPI, which dominate the RAM-test/boot mix but want the two-region RAM
-fast path replicated in asm — and RTS/JSR. Beyond that: SA-1 (M7).
+With 5f the memory-move phases fell **~3.2×** — `fbfill` (MOVE.L Dn,(An)+, the
+single biggest phase) **265 → 84**, `ram.l` 55→17, `ram.w` 49→14 — by
+replicating the two-region RAM decode (`macmem.h`: ≥$2000 → $7E0000 linear;
+<$2000 → the $A06000 bank-$20 mirror) in asm and reading/writing big-endian via
+`xba`. A long is two independent word accesses, so the $1FFF/$2000 seam and the
+64 KB bank edge fall out exactly as the C's rd16/rd16 handles them, and the
+handler validates every memory address (clean RAM, else punt) *before* it writes
+or bumps an `(An)+` register — the punt-before-mutate rule. `copy` (MOVE.L
+(A0)+,(A1)+ from ROM) and `ram.b` are untouched: mem→mem, ROM-source and MOVE.B
+still punt.
+
+**Where item 5 goes next** (the handler set keeps growing): MOVE.B and the
+ROM-source / mem→mem MOVE (unlocks `copy` and much of the boot), byte/word sizes
+for the register ALU, CMPI (the other half of the RAM-test mix), and RTS/JSR.
+Beyond that: SA-1 (M7).
