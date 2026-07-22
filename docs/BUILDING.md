@@ -74,19 +74,21 @@ From `snes/`:
 
 ```sh
 make macboot          # -> build/macboot.sfc   the live boot (ROM + disk embedded)
-make macboot TELEPORT=desktop  # teleport straight to the Finder desktop, not the boot
-make macboot FASTBOOT=0        # the purist power-on (no teleport; very slow)
+make macboot-desktop  # teleport straight to the Finder desktop, not the boot
+make macboot-purist   # the faithful power-on (no teleport; very slow)
 make macparity        # -> build/macparity.sfc the host<->SNES parity ROM
 make test-macparity   # build + run the parity check in Mesen (expects "PARITY OK")
 make test-macboot     # build + run the live boot in Mesen
 ```
 
-By default the boot **teleports** past the ROM's ~1.5M-instruction RAM test to the first
-disk read, so the Happy Mac shows up in moments and you watch it boot to the Finder;
-`TELEPORT=desktop` teleports all the way to the settled desktop (power-on → Finder in
-seconds); `FASTBOOT=0` is the faithful power-on with no teleport at all. The warm state
-each uses is generated from *your* ROM at build time and embedded in the cart (never
-committed). See [INTERNALS.md](INTERNALS.md#fastboot) and [PERF.md](PERF.md).
+By default (`make macboot`) the boot **teleports** past the ROM's ~1.5M-instruction RAM
+test to the first disk read, so the Happy Mac shows up in moments and you watch it boot
+to the Finder; **`make macboot-desktop`** teleports all the way to the settled desktop
+(power-on → Finder in seconds); **`make macboot-purist`** is the faithful power-on with
+no teleport at all. (The targets are thin wrappers over `TELEPORT=desktop` / `FASTBOOT=0`
+if you'd rather pass the flags.) The warm state each uses is generated from *your* ROM at
+build time and embedded in the cart (never committed). See
+[INTERNALS.md](INTERNALS.md#fastboot) and [PERF.md](PERF.md).
 
 `raw2sfc.py` embeds your `roms/mac128k.rom` at cart offset `$080000`, `roms/sys11_data.bin`
 at `$100000`, the generated fastboot warm state at `$180000`, and (if present) a second

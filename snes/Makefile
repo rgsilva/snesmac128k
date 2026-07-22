@@ -210,9 +210,13 @@ $(BUILD)/macboot_$(MACVARIANT).raw: $(BUILD)/macheader.o $(BUILD)/tilecopy.o $(B
 $(BUILD)/macboot_$(MACVARIANT).sfc: $(BUILD)/macboot_$(MACVARIANT).raw tools/raw2sfc.py ../roms/mac128k.rom ../roms/sys11_data.bin $(MACBOOT_DEPS) $(DISK2)
 	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom --at 0x100000 ../roms/sys11_data.bin $(MACBOOT_BLOB) $(DISK2_BLOB)
 
-.PHONY: macboot test-macboot
-macboot: $(BUILD)/macboot_$(MACVARIANT).sfc
+.PHONY: macboot macboot-desktop macboot-purist test-macboot
+macboot: $(BUILD)/macboot_$(MACVARIANT).sfc         # boot teleport (watch it boot)
 	@cp $< $(BUILD)/macboot.sfc && echo "  build/macboot.sfc  <- $(MACVARIANT)"
+macboot-desktop:                                    # teleport straight to the Finder
+	@$(MAKE) macboot TELEPORT=desktop
+macboot-purist:                                     # faithful power-on, no teleport
+	@$(MAKE) macboot FASTBOOT=0
 test-macboot: $(BUILD)/macboot_$(MACVARIANT).sfc
 	@cp $< $(BUILD)/macboot.sfc
 	$(MESEN) --testrunner $(BUILD)/macboot.sfc test/macboot.lua
