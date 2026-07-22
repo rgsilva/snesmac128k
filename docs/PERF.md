@@ -297,3 +297,40 @@ parity gate was dieted to fit: the per-step hash mixer is now rot1-xor-add in
 step made the gate ~4x the cost of the machine it checks), the RAM sweep
 samples every 16th byte, and `MACP_N` defaults to 500. A full gate run is now
 ~20 s.
+
+The follow-up round (items 1–4, measured with the ~2-frame per-phase refresh
+included; subtract ~21 for machine-only):
+
+| change | phases 1–10 |
+|---|---|
+| v2 + per-phase refresh | 758 |
+| 1: inline bus fast paths in the core (`m68kbus.h`) | 728 |
+| 2+3: `mac_run(n)` batching + hot-first group-4 decode | 717 |
+| 4: `--strong-inline` (parity-clean, unlike `--speed`) | 700 |
+
+Round total ≈ 1.08× — and the decode reorder favors LEA/JSR/RTS-dense real
+boot code beyond what the nop-heavy bench can show.
+
+## 9. Item 5: the hand-65816 core (5a–5d)
+
+The ladder, each rung parity- and CRC-gated:
+
+| rung | what | phases 1–10 |
+|---|---|---|
+| 5a | the CPU context (`m68kc`, fetch cache, timers, overlay) moves into the **direct page** | 712 (wash — the enabler) |
+| 5b | `m68k_exec(op)` split out of `m68k_step` | — |
+| 5c | **`calypsi/m68krun.s`**: the per-instruction skeleton in ~30 dp-addressed instructions (gate, fetch-cache hit + `xba`, PC bump, dispatch; slow path = the full C step, no sync needed — no private state) | 649 |
+| 5d | **native handlers** (exact flag-for-flag C mirrors, punt-before-mutate): NOP, MOVEQ×16, BRA.b, BNE.b, BEQ.b, DBRA | **615** |
+
+The all-native `nop` phase collapsed **23 → 6 frames — ~330 CPU cycles per
+covered instruction, ~4×**. Found along the way: Calypsi 5.17 ICEs on a
+variable index into a `__tiny` array (worked around via a `__near` pointer
+into the same DP storage), and the linker won't emit in-bank 16-bit relocs
+for far-section symbols (hence the compare-chain dispatch and JML control
+flow).
+
+**Where item 5 goes next** (the handler set is designed to grow): the MOVE
+family (the most common ops in real code), ADDQ/SUBQ, RTS/JSR, TST, CMP —
+register-direct forms are cheap adds; memory EAs want the two-region RAM
+fast path replicated in asm. Beyond that: the later-teleport option
+("power-on to Finder in seconds"), then SA-1 (M7).
