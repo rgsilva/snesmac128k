@@ -277,10 +277,19 @@ the instruction about to issue that first read and dumps the whole machine (regi
 VIA, all 128 KB of RAM); the live boot embeds that state in the cart and **teleports**
 to it when it first reaches the RAM-test entry PC. The result is bit-identical to having
 waited — verified by comparing framebuffer and register hashes against a cold boot at
-several checkpoints — minus the wait, so the Happy Mac appears in moments. Build
-`FASTBOOT=0` for the purist power-on. The warm state is regenerated from your own ROM at
-build time and never committed. (Details, and the `_BlockMove` HLE that rides with it,
-in [PERF.md](PERF.md).)
+several checkpoints — minus the wait, so the Happy Mac appears in moments.
+
+There are two teleport targets, chosen by `TELEPORT`:
+
+- **`boot`** (default) lands at the first disk read, so you still *watch* the disk boot:
+  Happy Mac → Welcome → Finder.
+- **`desktop`** (`make macboot TELEPORT=desktop`) runs the host boot all the way to the
+  point where the framebuffer stops changing — the Finder desktop, drawn and idle — and
+  captures *that*, so power-on jumps straight to the desktop in seconds.
+
+Build `FASTBOOT=0` for the purist power-on. The warm state is regenerated from your own
+ROM at build time and never committed. (Details, and the `_BlockMove` HLE that rides
+with it, in [PERF.md](PERF.md).)
 
 ---
 

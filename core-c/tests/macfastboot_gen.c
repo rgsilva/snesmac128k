@@ -1,27 +1,44 @@
 /* Generate the MAC_FASTBOOT warm state (docs/PERF.md item I1).
 **
-** The 128K ROM spends ~1.5M instructions before its first disk read: the
-** power-on RAM test (~1.3M — and it does NOT zero RAM afterwards, the test
-** patterns stay), then hardware init and the boot-chime delay loops (~0.2M —
-** we don't emulate sound). None of it is watchable. This tool boots the
-** user's ROM on the host up to the instruction ABOUT to issue the first
-** .Sony read, then dumps the complete machine state: registers to a header,
-** the full 128 KB RAM image to a sidecar binary. mac.c built -DMAC_FASTBOOT
-** teleports there when the boot first reaches the RAM test's entry PC — a
-** bit-identical machine, minus the wait; the disk boot starts immediately.
+** Two capture points, chosen by the `mode` argument:
+**
+**   boot     (default) — the instruction about to issue the first .Sony read.
+**              The 128K ROM spends ~1.5M instructions before it: the power-on
+**              RAM test (~1.3M — and it does NOT zero RAM afterwards, the test
+**              patterns stay), hardware init, and the boot-chime delay loops.
+**              Skipping it means you still WATCH the disk boot: Happy Mac ->
+**              Welcome -> Finder. This is the default.
+**   desktop  — run on until the framebuffer stops changing (the Finder desktop
+**              drawn and idle), and capture THAT. Teleporting here skips the
+**              whole boot: power-on -> Finder in seconds. Opt-in.
+**
+** Either way the tool boots the user's ROM on the host to the capture point and
+** dumps the complete machine: registers to a header, the full 128 KB RAM image
+** to a sidecar binary. mac.c built -DMAC_FASTBOOT teleports there when the boot
+** first reaches the RAM test's entry PC — bit-identical to having waited.
 **
 ** Regenerated at build time from the user's own ROM + disk (same pattern as
 ** macparity_ref.h); both outputs are Apple-derived and never committed.
 **
-** usage: macfastboot_gen rom disk out_ref.h out_ram.bin */
+** usage: macfastboot_gen rom disk out_ref.h out_ram.bin [mode] [disk2]
+**        mode = boot (default) | desktop */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "mac.h"
 
 void mac_dbg_via_dump(uint8_t v[16]);   /* mac.c */
 
 #define TRIGGER_PC 0x400200ul     /* first instruction of the RAM-test cluster */
-#define MAX_STEPS  4000000L
+#define MAX_STEPS  30000000L      /* generous: the desktop settles by ~7M cold */
+
+/* desktop-settle detector: the visible framebuffer unchanged across several
+** checks past a floor (the boot has finished drawing and gone idle). */
+#define FB_LO      0x1A700ul
+#define FB_HI      0x1FC80ul      /* $1A700 + 342*64 */
+#define SETTLE_FLOOR   5000000L   /* don't look before the desktop could exist */
+#define SETTLE_STRIDE   250000L
+#define SETTLE_STABLE        4    /* 4 unchanged checks = 1M steps of no motion */
 
 static long first_read = -1, stepno;
 static void hook(int tnum, uint32_t pos, uint32_t cnt){
@@ -30,11 +47,21 @@ static void hook(int tnum, uint32_t pos, uint32_t cnt){
 }
 extern void (*mac_sony_hook)(int, uint32_t, uint32_t);
 
+static uint32_t fbhash(const uint8_t *ram){
+  uint32_t h = 2166136261u, a;
+  for (a = FB_LO; a < FB_HI; a++) h = (h ^ ram[a]) * 16777619u;
+  return h;
+}
+
 int main(int argc, char **argv){
   static uint8_t rom[65536]; static uint8_t disk[409600]; static uint8_t disk2[409600];
-  FILE *f, *oh, *ob; long dn = 0, dn2 = 0, i;
+  FILE *f, *oh, *ob; long dn = 0, dn2 = 0, i, capture_step = -1;
+  int desktop;
+  const char *mode;
 
-  if (argc < 5) { fprintf(stderr, "usage: macfastboot_gen rom disk ref.h ram.bin [disk2]\n"); return 2; }
+  if (argc < 5) { fprintf(stderr, "usage: macfastboot_gen rom disk ref.h ram.bin [mode] [disk2]\n"); return 2; }
+  mode = (argc > 5 && argv[5][0]) ? argv[5] : "boot";
+  desktop = (strcmp(mode, "desktop") == 0);
   f = fopen(argv[1], "rb");
   if (!f || fread(rom, 1, 65536, f) != 65536) { fprintf(stderr, "bad rom\n"); return 2; }
   fclose(f);
@@ -42,32 +69,47 @@ int main(int argc, char **argv){
   if (!f) { fprintf(stderr, "bad disk\n"); return 2; }
   dn = (long)fread(disk, 1, sizeof disk, f); fclose(f);
 
-  if (argc > 5) {
-    f = fopen(argv[5], "rb");
+  if (argc > 6 && argv[6][0]) {
+    f = fopen(argv[6], "rb");
     if (!f) { fprintf(stderr, "bad disk2\n"); return 2; }
     dn2 = (long)fread(disk2, 1, sizeof disk2, f); fclose(f);
   }
 
-  /* pass 1: step count of the first .Sony read */
-  mac_sony_hook = hook;
+  /* pass 1: find the capture step for the chosen mode */
   mac_init(rom); mac_set_disk(disk, (uint32_t)dn);
   if (dn2) mac_set_disk2(disk2, (uint32_t)dn2);
-  for (stepno = 0; stepno < MAX_STEPS && first_read < 0; stepno++) mac_step();
-  if (first_read < 0) { fprintf(stderr, "no disk read in %ld steps\n", MAX_STEPS); return 1; }
+  if (desktop) {
+    const uint8_t *ram = mac_ram_ptr();
+    uint32_t prev = 0; int stable = 0;
+    for (stepno = 0; stepno < MAX_STEPS; stepno++) {
+      mac_step();
+      if (stepno >= SETTLE_FLOOR && (stepno % SETTLE_STRIDE) == 0) {
+        uint32_t h = fbhash(ram);
+        if (h == prev) { if (++stable >= SETTLE_STABLE) { capture_step = stepno; break; } }
+        else { stable = 0; prev = h; }
+      }
+    }
+    if (capture_step < 0) { fprintf(stderr, "desktop never settled in %ldM steps\n", MAX_STEPS / 1000000); return 1; }
+  } else {
+    mac_sony_hook = hook;
+    for (stepno = 0; stepno < MAX_STEPS && first_read < 0; stepno++) mac_step();
+    mac_sony_hook = 0;
+    if (first_read < 0) { fprintf(stderr, "no disk read in %ldM steps\n", MAX_STEPS / 1000000); return 1; }
+    capture_step = first_read;   /* PC ends on the trap word, about to read */
+  }
 
-  /* pass 2: stop just BEFORE that step — PC points at the trap word */
-  mac_sony_hook = 0;
+  /* pass 2: run to the capture step and snapshot the machine */
   mac_init(rom); mac_set_disk(disk, (uint32_t)dn);
   if (dn2) mac_set_disk2(disk2, (uint32_t)dn2);
-  for (i = 0; i < first_read; i++) mac_step();
+  for (i = 0; i < capture_step; i++) mac_step();
 
   oh = fopen(argv[3], "w"); ob = fopen(argv[4], "wb");
   if (!oh || !ob) { fprintf(stderr, "cannot write outputs\n"); return 2; }
-  fprintf(oh, "/* generated by macfastboot_gen — Apple-derived state, do not commit */\n");
+  fprintf(oh, "/* generated by macfastboot_gen (%s) — Apple-derived state, do not commit */\n", mode);
   fprintf(oh, "#define MACFB_TRIGGER_PC 0x%06lXul\n", (unsigned long)TRIGGER_PC);
   fprintf(oh, "#define MACFB_PC 0x%06Xul\n#define MACFB_SR 0x%04Xu\n", m68kc.pc, m68kc.sr);
   fprintf(oh, "#define MACFB_USP 0x%08Xul\n#define MACFB_ISP 0x%08Xul\n", m68kc.usp, m68kc.isp);
-  fprintf(oh, "#define MACFB_VBL %uul\n#define MACFB_STEPS %ldul\n", mac_vbl_count(), first_read);
+  fprintf(oh, "#define MACFB_VBL %uul\n#define MACFB_STEPS %ldul\n", mac_vbl_count(), capture_step);
   fprintf(oh, "static const uint32_t macfb_d[8] = {");
   for (i = 0; i < 8; i++) fprintf(oh, "0x%08Xul,", m68kc.d[i]);
   fprintf(oh, "};\nstatic const uint32_t macfb_a[8] = {");
@@ -80,7 +122,7 @@ int main(int argc, char **argv){
   fclose(oh);
   fwrite(mac_ram_ptr(), 1, MAC_RAM_SIZE, ob);
   fclose(ob);
-  fprintf(stderr, "fastboot: %ld steps skipped, resume pc=%06X sr=%04X vbl=%u\n",
-          first_read, m68kc.pc, m68kc.sr, mac_vbl_count());
+  fprintf(stderr, "fastboot[%s]: %ld steps skipped, resume pc=%06X sr=%04X vbl=%u\n",
+          mode, capture_step, m68kc.pc, m68kc.sr, mac_vbl_count());
   return 0;
 }

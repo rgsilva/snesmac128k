@@ -515,7 +515,10 @@ static int sony_trap(uint16_t op){
 ** when the live boot first reaches the test's entry PC we load the full
 ** RAM image + registers + VIA and resume at the instruction about to issue
 ** the first .Sony read — bit-identical to having waited, minus the wait. */
-#include "macfastboot_ref.h"
+#ifndef MACFB_REF                       /* build picks boot vs desktop warm state */
+#  define MACFB_REF "macfastboot_ref.h"
+#endif
+#include MACFB_REF
 static const uint8_t *fastboot_ram;   /* host: image buffer; SNES: unused */
 static uint8_t fastboot_armed;
 void mac_fastboot_arm(const uint8_t *ramimg){ fastboot_ram = ramimg; fastboot_armed = 1; }

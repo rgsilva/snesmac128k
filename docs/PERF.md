@@ -235,6 +235,20 @@ from `vbl=00000000` to `vbl=0000007D` and the boot proceeds straight into
 disk I/O. At ~860 instr/s the pre-Happy-Mac dead time drops from ~34 minutes
 of emulated grind to seconds.
 
+**Two teleport targets (`TELEPORT=`).** The same machine works at *any*
+deterministic capture point, so the generator takes a mode. `boot` (default)
+captures at the first disk read, so you still watch Happy Mac → Welcome →
+Finder. `desktop` runs the host boot on until the framebuffer stops changing —
+the Finder desktop, drawn and idle (~6M cold steps, detected by hashing the
+visible framebuffer and waiting for it to hold still) — and captures that;
+`make macboot TELEPORT=desktop` then jumps power-on straight to the desktop
+(`vbl` leaps to `0x1F4`, confirmed on the SNES). It stays opt-in — the default
+is still to *watch* it boot. (Build robustness note: the warm state and every
+object that bakes it in carry the mode in their filenames — `macfb_desktop.*`,
+`macfast_desktop.o`, `macboot_desktop.sfc` — because Apple's make has 1-second
+mtime granularity and a fixed output name silently kept the stale state when
+the two modes regenerated in the same second.)
+
 **Measured-but-deferred:** hardware mul/div (K) — the bench's muldiv phase
 sits only ~25% over the floor, and boot code barely multiplies; revisit if a
 future workload says otherwise.

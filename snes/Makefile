@@ -161,27 +161,38 @@ test-bench: $(BUILD)/macbench.sfc $(BUILD)/benchhost
 # boot. The warm state is generated from the user's own ROM+disk at build
 # time (like macparity_ref.h) and never committed.
 FASTBOOT ?= 1
-# Optional second (external-drive) disk image: drop any 400 KB raw image at
-# roms/disk2_data.bin and the Finder gets a second volume; without it the
-# external drive reports empty sense lines and the ROM sees one drive.
+# TELEPORT picks WHERE fastboot lands: `boot` (default) stops at the first disk
+# read, so you still watch Happy Mac -> Welcome -> Finder; `desktop` runs on to
+# the settled Finder desktop, so power-on jumps straight there in seconds.
+TELEPORT ?= boot
 DISK2 := $(wildcard ../roms/disk2_data.bin)
 ifneq ($(DISK2),)
 DISK2_FLAG := -DDISK2_SIZE=$(shell stat -f%z $(DISK2))ul
 DISK2_BLOB := --at 0x200000 $(DISK2)
 endif
+# The warm state and the object that embeds it carry the mode in their FILENAMES
+# (macfb_boot.* / macfb_desktop.*), so flipping TELEPORT selects different build
+# targets — no reliance on mtimes (Apple's make has 1-second granularity, which
+# silently kept a stale state when the two modes were the same fixed filename).
 $(BUILD)/macfbgen: ../core-c/tests/macfastboot_gen.c ../core-c/src/mac.c ../core-c/src/m68k.c | $(BUILD)
 	cc -O2 -std=c11 -I../core-c/src -o $@ ../core-c/tests/macfastboot_gen.c ../core-c/src/mac.c ../core-c/src/m68k.c
-$(BUILD)/macfastboot_ref.h $(BUILD)/macfastboot_ram.bin: $(BUILD)/macfbgen ../roms/mac128k.rom ../roms/sys11_data.bin $(DISK2)
-	$(BUILD)/macfbgen ../roms/mac128k.rom ../roms/sys11_data.bin $(BUILD)/macfastboot_ref.h $(BUILD)/macfastboot_ram.bin $(DISK2)
-$(BUILD)/macfast.o: ../core-c/src/mac.c ../core-c/src/mac.h ../core-c/src/m68k.h macmem.h $(BUILD)/macfastboot_ref.h | $(BUILD)
-	$(CC) -o $@ ../core-c/src/mac.c $(MACSNES_CFLAGS) -DMAC_FASTBOOT --list-file=$(@:.o=.lst)
+$(BUILD)/macfb_%.h $(BUILD)/macfb_%.bin: $(BUILD)/macfbgen ../roms/mac128k.rom ../roms/sys11_data.bin $(DISK2) | $(BUILD)
+	$(BUILD)/macfbgen ../roms/mac128k.rom ../roms/sys11_data.bin $(BUILD)/macfb_$*.h $(BUILD)/macfb_$*.bin $* $(DISK2)
+$(BUILD)/macfast_$(TELEPORT).o: ../core-c/src/mac.c ../core-c/src/mac.h ../core-c/src/m68k.h macmem.h $(BUILD)/macfb_$(TELEPORT).h | $(BUILD)
+	$(CC) -o $@ ../core-c/src/mac.c $(MACSNES_CFLAGS) -DMAC_FASTBOOT -DMACFB_REF='"macfb_$(TELEPORT).h"' --list-file=$(@:.o=.lst)
 
 ifeq ($(FASTBOOT),1)
-MACBOOT_MACO := $(BUILD)/macfast.o
+# MACVARIANT names the whole build (boot / desktop / off) so every downstream
+# object and the .sfc are mode-specific files — switching modes selects a
+# different target rather than overwriting a fixed name (which went stale under
+# 1-second mtimes). `macboot` copies the chosen variant to build/macboot.sfc.
+MACVARIANT := $(TELEPORT)
+MACBOOT_MACO := $(BUILD)/macfast_$(TELEPORT).o
 MACBOOT_FLAG := -DMAC_FASTBOOT
-MACBOOT_BLOB := --at 0x180000 $(BUILD)/macfastboot_ram.bin
-MACBOOT_DEPS := $(BUILD)/macfastboot_ram.bin
+MACBOOT_BLOB := --at 0x180000 $(BUILD)/macfb_$(TELEPORT).bin
+MACBOOT_DEPS := $(BUILD)/macfb_$(TELEPORT).bin
 else
+MACVARIANT := off
 MACBOOT_MACO := $(BUILD)/mac.o
 MACBOOT_FLAG :=
 MACBOOT_BLOB :=
@@ -192,16 +203,18 @@ $(BUILD)/maczoom_tab.h: tools/mkzoomtab.py | $(BUILD)
 	python3 tools/mkzoomtab.py $@
 $(BUILD)/mackbd_tab.h: tools/mkkbd.py tools/font8x8_basic.h | $(BUILD)
 	python3 tools/mkkbd.py $@
-$(BUILD)/macboot.o: macboot.c calypsi/mailbox.h ../core-c/src/mac.h $(BUILD)/maczoom_tab.h $(BUILD)/mackbd_tab.h | $(BUILD)
+$(BUILD)/macboot_$(MACVARIANT).o: macboot.c calypsi/mailbox.h ../core-c/src/mac.h $(BUILD)/maczoom_tab.h $(BUILD)/mackbd_tab.h | $(BUILD)
 	$(CC) -o $@ macboot.c $(MACSNES_CFLAGS) $(MACBOOT_FLAG) $(DISK2_FLAG) --list-file=$(@:.o=.lst)
-$(BUILD)/macboot.raw: $(BUILD)/macheader.o $(BUILD)/tilecopy.o $(BUILD)/m68krun.o $(BUILD)/macmailbox.o $(BUILD)/macm68k.o $(MACBOOT_MACO) $(BUILD)/macboot.o
-	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macboot.map $^
-$(BUILD)/macboot.sfc: $(BUILD)/macboot.raw tools/raw2sfc.py ../roms/mac128k.rom ../roms/sys11_data.bin $(MACBOOT_DEPS) $(DISK2)
+$(BUILD)/macboot_$(MACVARIANT).raw: $(BUILD)/macheader.o $(BUILD)/tilecopy.o $(BUILD)/m68krun.o $(BUILD)/macmailbox.o $(BUILD)/macm68k.o $(MACBOOT_MACO) $(BUILD)/macboot_$(MACVARIANT).o
+	$(LN) -o $@ $(LNFLAGS) --list-file=$(BUILD)/macboot_$(MACVARIANT).map $^
+$(BUILD)/macboot_$(MACVARIANT).sfc: $(BUILD)/macboot_$(MACVARIANT).raw tools/raw2sfc.py ../roms/mac128k.rom ../roms/sys11_data.bin $(MACBOOT_DEPS) $(DISK2)
 	python3 tools/raw2sfc.py $< $@ --at 0x080000 ../roms/mac128k.rom --at 0x100000 ../roms/sys11_data.bin $(MACBOOT_BLOB) $(DISK2_BLOB)
 
 .PHONY: macboot test-macboot
-macboot: $(BUILD)/macboot.sfc
-test-macboot: $(BUILD)/macboot.sfc
+macboot: $(BUILD)/macboot_$(MACVARIANT).sfc
+	@cp $< $(BUILD)/macboot.sfc && echo "  build/macboot.sfc  <- $(MACVARIANT)"
+test-macboot: $(BUILD)/macboot_$(MACVARIANT).sfc
+	@cp $< $(BUILD)/macboot.sfc
 	$(MESEN) --testrunner $(BUILD)/macboot.sfc test/macboot.lua
 
 clean:
