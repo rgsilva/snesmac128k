@@ -237,10 +237,41 @@ of emulated grind to seconds.
 
 **Measured-but-deferred:** hardware mul/div (K) — the bench's muldiv phase
 sits only ~25% over the floor, and boot code barely multiplies; revisit if a
-future workload says otherwise. The remaining big lever short of SA-1 is the
-per-step floor itself (~50 frames ≈ 16k master clocks per NOP: call-chain
-depth, 32-bit direct-page traffic, decode chains) — that is item J, hand
-65816 for the step loop, guided by this table.
+future workload says otherwise.
+
+## 8. The profiler round (harness v2)
+
+`test/macprof.lua` samples the 65816 PC twice per frame; symbolicate against
+the linker map (attributing Calypsi's anonymous `?L` helper blocks to the
+preceding symbol). First profile: **~54% interpreter, ~20% `refresh()`,
+~17% `mac_init`** — the video copy and the one-time RAM clear, not the
+emulator, were the top optimizable costs. Ablation confirmed it: removing
+the per-phase refresh cut the bench 985 → 737 frames, i.e. **~25 frames
+(0.4 s) per redraw** — a cost that had been landing inside the phase windows
+and inflating every row of the table above (ratios stayed honest; absolutes
+were ~25% pessimistic).
+
+Fix: `calypsi/tilecopy.s`, hand 65816 — `tile_rows` (the fb→tile rebuild,
+fully-unrolled strided copies, **~2 frames per redraw incl. DMA, 13×**),
+`mac_ram_clear_all` (seed + overlapping-MVN fill, ~2 frames, was ~260),
+`mac_fastboot_load` (three MVNs, ~3 frames, was ~130). Every pan step,
+mouse move and boot redraw rides `tile_rows` now.
+
+Bench v2 keeps the (now ~2-frame) per-phase refresh; pure-machine numbers
+with refresh ablated:
+
+| | total | nop | alu | ram.b | ram.w | ram.l | shift | muldiv | copy | fbfill | ≈instr/s |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| v2 machine-only | 737 | 30 | 54 | 52 | 53 | 63 | 64 | 40 | 39 | 336 | **1139** |
+
+So the true state pre-SA-1: **376 → ~1,140 instr/s (3.0×)** plus the boot's
+1.5M-instruction teleport. Next levers, in measured-priority order: inline
+the RAM/ROM fast paths into m68k.c itself (the cross-module `jsl` per memory
+access and the anonymous helper time around it ≈ 20%+ of the remainder),
+`mac_run(n)` step batching + input-poll cadence, decode-chain reordering
+(`op_group4` walks 6 masked compares before NOP), a parity-gated
+`--strong-inline` experiment — and then item J proper (hand 65816 for
+fetch/dispatch), the 2–3× that remains before SA-1 (M7).
 
 Reading the baseline: a bare NOP costs ~44,600 master clocks — the floor
 every instruction pays (two full fetch16s: the real one plus the sony-trap
