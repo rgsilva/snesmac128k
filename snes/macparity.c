@@ -36,7 +36,7 @@ int main(void){
   }
 
   rh = MACP_FNV_INIT;
-  for (i = 0; i < 0x20000u; i++) rh = macp_fnv1(rh, mac_ram_rd(i));
+  for (i = 0; i < 0x20000u; i += MACP_RAM_STRIDE) rh = macp_fnv1(rh, mac_ram_rd(i));
 
   mb_puts("cpu "); mb_puthex32(h); mb_puts(" ram "); mb_puthex32(rh); mb_putc('\n');
 

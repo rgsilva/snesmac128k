@@ -186,9 +186,29 @@ CRC must print `A97233CE` on both host and SNES, every row.
 | change | total | nop | alu | ram.b | ram.w | ram.l | shift | muldiv | copy | fbfill | ≈instr/s |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | baseline (`63e1e1c`) | 2234 | 136 | 163 | 163 | 175 | 192 | 176 | 110 | 125 | 952 | 376 |
+| G `--no-cross-call` | 2233 | 136 | 163 | 163 | 175 | 192 | 176 | 110 | 124 | 952 | 376 |
 
 Reading the baseline: a bare NOP costs ~44,600 master clocks — the floor
 every instruction pays (two full fetch16s: the real one plus the sony-trap
 guard's, the per-step modulo, dispatch). The spread up to ram.l/copy
 (~63–77k) is the byte-wise window tax; muldiv's 72k is the runtime
 mul/div helpers on top of the floor.
+
+**Item G is dead, killed by its own measurement.** `--no-cross-call` un-outlines
+all 588 jsl/rtl helper sites and buys *zero frames* — the factoring was never
+on the critical path. Adding `--speed` "won" 7% but MISCOMPILES the machine:
+the real-ROM boot derails deterministically around step 768 (the bench alone
+passed — its instruction mix never hits the broken path; the parity gate
+caught it). Flags reverted to plain `-O2`. This is the harness doing its job:
+one static-analysis guess disproven, one compiler landmine flagged, before
+either touched a real commit.
+
+**Harness note — the Mesen guillotine.** Mesen's `--testrunner` hard-kills
+runs at ~100 s wall clock (exit 255, no message) and runs throttled to
+real-time 60 fps, so every gate must fit the budget *on a loaded machine* —
+this, not "environment degradation", is what truncated past parity runs. The
+parity gate was dieted to fit: the per-step hash mixer is now rot1-xor-add in
+16-bit halves (FNV's 32-bit multiply is a Calypsi runtime call; 20 folds per
+step made the gate ~4x the cost of the machine it checks), the RAM sweep
+samples every 16th byte, and `MACP_N` defaults to 500. A full gate run is now
+~20 s.

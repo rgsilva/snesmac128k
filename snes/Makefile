@@ -89,8 +89,11 @@ test-macvideo: $(BUILD)/macvideo.sfc
 # -O2 for speed (the live boot is unusably slow at the -O0 correctness baseline);
 # the parity run re-validates correctness at -O2. The 68000 core is the hot path,
 # so it gets its own optimized object (macm68k.o) rather than the M2 -O0 one.
+# Plain -O2. Measured (docs/PERF.md item G): --no-cross-call buys 0 frames on
+# the bench, and --speed MISCOMPILES the machine build (real-ROM boot derails
+# ~step 768 — the bench alone didn't catch it; the parity gate did).
 MACSNES_CFLAGS := --core=65816 --target=snes $(MODEL) --no-ppu-mul -O2 -DMAC_SNES -I. $(M68INC) -I$(BUILD)
-MACP_N ?= 20000
+MACP_N ?= 500
 
 $(BUILD)/macheader.o: calypsi/macheader.s | $(BUILD)
 	$(AS) -o $@ $< $(AFLAGS)
