@@ -340,7 +340,7 @@ The ladder, each rung parity- and CRC-gated:
 | 5c | **`calypsi/m68krun.s`**: the per-instruction skeleton in ~30 dp-addressed instructions (gate, fetch-cache hit + `xba`, PC bump, dispatch; slow path = the full C step, no sync needed — no private state) | 649 |
 | 5d | **native handlers** (exact flag-for-flag C mirrors, punt-before-mutate): NOP, MOVEQ×16, BRA.b, BNE.b, BEQ.b, DBRA | **615** |
 | 5e | **the branch + register-ALU set**: the *full* Bcc (all 14 conditions + BRA), ADDQ/SUBQ #d,An (no flags), and the long register-direct ALU — ADD/SUB/CMP/AND/OR.L Dn,Dn and ADDQ/SUBQ.L #d,Dn | `alu` **49 → 19** |
-| 5f | **MOVE.W/.L over the RAM fast path**: src/dst in {Dn,An,(An),(An)+}, one memory operand, clean RAM only (mem→mem, MOVE.B, ROM/IO, odd, overlay-on, wider modes all punt) | `fbfill` **265 → 84**, `ram.l` 55→17, `ram.w` 49→14 |
+| 5f | **MOVE.B/.W/.L over the RAM fast path**: src/dst in {Dn,An,(An),(An)+}, one memory operand, clean RAM only (mem→mem, ROM/IO, odd, overlay-on, wider modes all punt) | `fbfill` **265 → 86**, `ram.b` 48→14, `ram.l` 55→18, `ram.w` 49→13 |
 | 5g | **RTS / BSR.b / JSR (An)** — the call/return set; the stack read (RTS) and write (BSR/JSR push) reuse the MOVE fast path (the stack is RAM) | gates via a new `calls` phase |
 
 The all-native `nop` phase collapsed **23 → 6 frames — ~330 CPU cycles per
@@ -385,7 +385,7 @@ never called subroutines, so a `calls` phase (32× `BSR sub … RTS` + 16× `JSR
 (A0)`, D7 threaded into the CRC) gates them: a wrong return address derails the
 run and splits the host↔SNES CRC.
 
-**Where item 5 goes next** (the handler set keeps growing): MOVE.B and the
-ROM-source / mem→mem MOVE (unlocks `copy` and the OS's ROM→RAM startup copies),
-byte/word sizes for the register ALU, CMPI, and JSR with a fetched EA
-(abs/disp/PC-relative). Beyond that: SA-1 (M7).
+**Where item 5 goes next** (the handler set keeps growing): the ROM-source /
+mem→mem MOVE (unlocks `copy` and the OS's ROM→RAM startup copies), byte/word
+sizes for the register ALU, CMPI, and JSR with a fetched EA (abs/disp/PC-
+relative). Beyond that: SA-1 (M7).

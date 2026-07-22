@@ -16,9 +16,10 @@
 ;;; BRA; BSR punts); ADDQ/SUBQ #d,An (no flags); DBRA (DBF); the long
 ;;; register-direct ALU — ADD/SUB/CMP/AND/OR.L Dn,Dn and ADDQ/SUBQ.L #d,Dn,
 ;;; with N/V/Z/C/X taken from the 65816 ALU (item 5e); and MOVE.W/.L between
-;;; {Dn,An,(An),(An)+} over the two-region RAM fast path (item 5f — one memory
-;;; operand, clean RAM only; mem->mem, MOVE.B, ROM/IO, odd, overlay-on and the
-;;; wider addressing modes all punt); and the subroutine call/return set
+;;; {Dn,An,(An),(An)+} over the two-region RAM fast path (item 5f — MOVE.B/.W/.L,
+;;; one memory operand, clean RAM only; mem->mem, ROM/IO, odd word/long,
+;;; overlay-on and the wider addressing modes all punt); and the subroutine
+;;; call/return set
 ;;; (item 5g) — RTS, BSR.b and JSR (An), the stack read/write reusing the same
 ;;; RAM fast path (BSR.w and abs/disp/index JSR punt). Slow path (pending irq,
 ;;; STOP, fetch-cache miss, extension word beyond the cached window): the full
@@ -842,7 +843,12 @@ h_move:       lda     dp:.tiny cur_op
               beq     mv_szl
               cmp     ##0x0030
               beq     mv_szw
-              jmp     long:punt       ; $1x MOVE.B -> C
+              cmp     ##0x0010
+              beq     mv_szb
+              jmp     long:punt
+mv_szb:       lda     ##1
+              sta     dp:.tiny mv_size
+              bra     mv_dec
 mv_szl:       lda     ##4
               sta     dp:.tiny mv_size
               bra     mv_dec
@@ -905,11 +911,19 @@ mv_rd_mem:    lda     dp:.tiny cur_op ; src (An)/(An)+ : a = A[sreg]
               lda     dp:.tiny (m68kc+2),x
               sta     dp:.tiny mv_a_hi
               jsl     long:mv_ptr
-              bcc     mv_punt          ; not clean RAM
-              ldy     ##0
+              bcc     mv_punt_r        ; not clean RAM
+              ldx     dp:.tiny mv_size
+              cpx     ##1
+              bne     mv_rd_memwl
+              ldy     ##0              ; byte @a
+              lda     [.tiny eap],y
+              and     ##0x00ff
+              sta     dp:.tiny mv_val_lo
+              bra     mv_rd_mem_inc
+mv_punt_r:    jmp     long:punt        ; read-path punt trampoline (after a bra)
+mv_rd_memwl:  ldy     ##0
               lda     [.tiny eap],y    ; big-endian word @a
               xba
-              ldx     dp:.tiny mv_size
               cpx     ##2
               bne     mv_rd_meml
               sta     dp:.tiny mv_val_lo      ; word
@@ -923,7 +937,7 @@ mv_rd_meml:   sta     dp:.tiny mv_val_hi      ; long: high word
               adc     ##0
               sta     dp:.tiny mv_a_hi
               jsl     long:mv_ptr
-              bcc     mv_punt
+              bcc     mv_punt_r
               ldy     ##0
               lda     [.tiny eap],y           ; low word @a+2
               xba
@@ -938,16 +952,21 @@ mv_rd_meml:   sta     dp:.tiny mv_val_hi      ; long: high word
 mv_rd_mem_inc: lda    dp:.tiny mv_smode
               cmp     ##0x0018
               bne     mv_wr           ; not (An)+ : done reading
-              lda     dp:.tiny cur_op ; (An)+ : A[sreg] += size
+              lda     dp:.tiny cur_op ; (An)+ : A[sreg] += size (byte+A7 -> 2)
               and     ##0x0007
               asl     a
               asl     a
               clc
               adc     ##32
               tax
-              lda     dp:.tiny (m68kc+0),x
-              clc
-              adc     dp:.tiny mv_size
+              lda     dp:.tiny mv_size
+              cmp     ##1
+              bne     mv_rsinc
+              cpx     ##60
+              bne     mv_rsinc
+              lda     ##2
+mv_rsinc:     clc
+              adc     dp:.tiny (m68kc+0),x
               sta     dp:.tiny (m68kc+0),x
               bcc     mv_wr
               inc     dp:.tiny (m68kc+2),x
@@ -960,9 +979,19 @@ mv_wr:        lda     dp:.tiny mv_dmode
               asl     a
               tax
               ldy     dp:.tiny mv_size
+              cpy     ##1
+              beq     mv_wr_dnb
               cpy     ##2
               bne     mv_wr_dnl
               lda     dp:.tiny mv_val_lo      ; word: low half only
+              sta     dp:.tiny (m68kc+0),x
+              jmp     long:mv_flags
+mv_wr_dnb:    lda     dp:.tiny (m68kc+0),x    ; byte: low 8 bits, upper 24 kept
+              and     ##0xff00
+              sta     dp:.tiny (m68kc+0),x
+              lda     dp:.tiny mv_val_lo
+              and     ##0x00ff
+              ora     dp:.tiny (m68kc+0),x
               sta     dp:.tiny (m68kc+0),x
               jmp     long:mv_flags
 mv_wr_dnl:    lda     dp:.tiny mv_val_lo      ; long
@@ -972,7 +1001,11 @@ mv_wr_dnl:    lda     dp:.tiny mv_val_lo      ; long
               jmp     long:mv_flags
 mv_wr_1:      cmp     ##0x0040
               bne     mv_wr_mem
-              lda     dp:.tiny cur_op ; dst An = MOVEA (no flags)
+              ldy     dp:.tiny mv_size
+              cpy     ##1
+              bne     mv_wr_movea
+              jmp     long:punt       ; MOVEA.B is illegal -> C
+mv_wr_movea:  lda     dp:.tiny cur_op ; dst An = MOVEA (no flags)
               xba
               and     ##0x000e
               asl     a
@@ -1010,6 +1043,8 @@ mv_wr_mem:    lda     dp:.tiny cur_op ; dst (An)/(An)+ : a = A[dreg]
               jsl     long:mv_ptr             ; validate a (before any write)
               bcc     mv_punt3
               ldx     dp:.tiny mv_size
+              cpx     ##1
+              beq     mv_wr_byte
               cpx     ##2
               beq     mv_wr_word
               lda     dp:.tiny mv_a_lo        ; long: validate a+2 too
@@ -1039,6 +1074,12 @@ mv_wr_mem:    lda     dp:.tiny cur_op ; dst (An)/(An)+ : a = A[dreg]
               sta     [.tiny eap],y
               bra     mv_wr_mem_inc
 mv_punt3:     jmp     long:punt
+mv_wr_byte:   ldy     ##0             ; 8-bit A: store exactly one byte
+              sep     #0x20
+              lda     dp:.tiny mv_val_lo
+              sta     [.tiny eap],y
+              rep     #0x20
+              bra     mv_wr_mem_inc
 mv_wr_word:   lda     dp:.tiny mv_val_lo
               xba
               ldy     ##0
@@ -1046,16 +1087,21 @@ mv_wr_word:   lda     dp:.tiny mv_val_lo
 mv_wr_mem_inc: lda    dp:.tiny mv_dmode
               cmp     ##0x00c0
               bne     mv_flags        ; not (An)+
-              lda     dp:.tiny cur_op ; (An)+ : A[dreg] += size
+              lda     dp:.tiny cur_op ; (An)+ : A[dreg] += size (byte+A7 -> 2)
               xba
               and     ##0x000e
               asl     a
               clc
               adc     ##32
               tax
-              lda     dp:.tiny (m68kc+0),x
-              clc
-              adc     dp:.tiny mv_size
+              lda     dp:.tiny mv_size
+              cmp     ##1
+              bne     mv_wdinc
+              cpx     ##60
+              bne     mv_wdinc
+              lda     ##2
+mv_wdinc:     clc
+              adc     dp:.tiny (m68kc+0),x
               sta     dp:.tiny (m68kc+0),x
               bcc     mv_flags
               inc     dp:.tiny (m68kc+2),x
@@ -1064,11 +1110,22 @@ mv_flags:     lda     dp:.tiny (m68kc+SR_OFF)
               and     ##0xfff0
               sta     dp:.tiny sr_tmp
               ldx     dp:.tiny mv_size
+              cpx     ##1
+              beq     mv_fl_byte
               cpx     ##2
               bne     mv_fl_long
               lda     dp:.tiny mv_val_lo      ; word
               beq     mv_fl_z
               bpl     mv_fl_done
+              lda     dp:.tiny sr_tmp
+              ora     ##0x0008
+              sta     dp:.tiny sr_tmp
+              bra     mv_fl_done
+mv_fl_byte:   lda     dp:.tiny mv_val_lo      ; byte: N from bit 7, Z from low 8
+              and     ##0x00ff
+              beq     mv_fl_z
+              bit     ##0x0080
+              beq     mv_fl_done
               lda     dp:.tiny sr_tmp
               ora     ##0x0008
               sta     dp:.tiny sr_tmp
