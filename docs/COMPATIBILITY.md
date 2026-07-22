@@ -25,12 +25,27 @@ QuickDraw, the Finder — on top of the emulated 68000. snesmac only fakes the d
 *hardware* (via the [HLE `.Sony` driver](INTERNALS.md#the-hle-sony-driver--how-it-reads-a-disk)),
 not the software.
 
+And once it's up, it's not a screenshot — it's a computer. With the d-pad and
+**A** you can pull down menus and launch desk accessories. Here is the Control
+Panel, opened and running on a Super Nintendo, volume slider, desktop-pattern
+editor and all:
+
+<p align="center">
+  <img src="assets/macboot_004.png" width="360" alt="The Control Panel desk accessory, running on the SNES"><br>
+  <sub>The Control Panel, driven with a SNES controller. (The clock reads 1940:
+  no battery-backed clock chip in this "Mac". Authentic behavior.)</sub>
+</p>
+
 ## What doesn't (yet)
 
-- **Mouse works; no keyboard yet.** The **d-pad** moves the cursor and **A** clicks — you
-  can pull down menus and click around the Finder. (The cursor lags, because the Mac only
-  redraws it on its VBL and the CPU is slow — fast-forward helps.) The **keyboard** isn't
-  wired up yet, so no typing; that's next (see [FUTURE.md](FUTURE.md)).
+- **Mouse works; no keyboard yet.** The **d-pad** moves the cursor, a tap of **A**
+  clicks (the press is stretched internally so the Mac's VBL-rate button sampling
+  can't miss it), holding **A** holds the button for menu pulls and drags. Menus
+  and desk accessories verified working on the SNES (see the Control Panel above).
+  The cursor still lags a little — the Mac redraws it only on its VBL — but far
+  less than it used to: redraws are ~13× cheaper and the machine ~6× faster since
+  the first boots (see [PERF.md](PERF.md)). The **keyboard** isn't wired up yet,
+  so no typing; that's next (see [FUTURE.md](FUTURE.md)).
 - **One disk, read-only.** A single 400 KB System floppy is served from the cartridge.
   Writes are acknowledged but not persisted; there's no second drive.
 - **The display is a 256×224 window** into the 512×342 Mac screen (the SNES can't show
@@ -44,26 +59,33 @@ not the software.
 
 ## The performance picture (the honest part)
 
-snesmac is **slow**. Measured in Mesen, the interpreted 68000 runs at roughly **200
-instructions per second**, so the ~3 million instructions it takes to reach the desktop
-is **tens of minutes to hours** of fast-forward. That's ~3,800× slower than a real
-Macintosh.
+snesmac is **slow, but no longer comically slow**. The interpreted 68000 started at
+~200 instructions/second (a cold boot to the desktop was ~4–5 hours); after the
+measured optimization campaign in [PERF.md](PERF.md) it runs at **~1,200
+instructions/second**, and the default build also **teleports past the ROM's RAM
+test and boot-chime delays** (1.5 M instructions the ROM burns before its first
+disk read — regenerated from your own ROM at build time, bit-equivalent resume,
+`FASTBOOT=0` for the purist boot). Net effect: the Happy Mac appears in moments,
+and the desktop is **tens of minutes away in real time — minutes under
+fast-forward** instead of an afternoon.
 
-It's not one bug — it's the shape of the problem:
+Why it can't just be fast, structurally:
 
 - **You're running a CPU interpreter, so one Mac instruction is a whole subroutine.**
-  Fetch the opcode, decode the addressing mode, do the op, write it back, update the
-  flags — thousands of 65816 cycles for what a real 68000 does in ~10.
-- **The CPUs are mismatched both ways.** The 68000 is 32-bit at 7.83 MHz; the 65816 is
-  16-bit at 3.58 MHz. Every 32-bit operation the Mac does becomes several 16-bit ones,
-  on a slower clock, with no usable hardware multiply/divide.
-- **The boot genuinely does a lot** — it checksums all 64 KB of ROM, pattern-tests all
-  128 KB of RAM, then mounts the disk and loads the System and Finder.
+  Fetch, decode, execute, write back, set flags — still ~450 generated 65816
+  instructions even for a 68000 `NOP`, dominated by 32-bit arithmetic on a 16-bit
+  CPU (measured with the sampling profiler; see PERF.md §8).
+- **The CPUs are mismatched both ways.** The 68000 is 32-bit at 7.83 MHz; the 65816
+  is 16-bit at 3.58 MHz. Every 32-bit operation becomes several 16-bit ones, on a
+  slower clock.
+- Every change lands with numbers from the **committable Apple-free bench ROM**
+  (`make -C snes test-bench`), plus real-ROM lockstep parity against the host —
+  the campaign killed as many "obvious" ideas as it confirmed, and one compiler
+  flag that miscompiled the machine.
 
-This is a "watch a Macintosh come alive on a Super Nintendo" demo, not a usable computer.
-Making it *watchable* (tens of minutes, or minutes) is the point of the perf work in
-[FUTURE.md](FUTURE.md) — chiefly the SA-1 coprocessor (3× clock + linear RAM) and
-hand-written assembly for the interpreter's hot path.
+What remains before it's *comfortable*: hand-65816 for the fetch/decode/dispatch
+skeleton, and the **SA-1** coprocessor (~10.7 MHz + linear RAM) as milestone M7 —
+see [FUTURE.md](FUTURE.md).
 
 ## Getting a disk
 

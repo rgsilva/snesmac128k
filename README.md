@@ -9,9 +9,21 @@ driver so it can read a System disk straight out of the cartridge. It boots Syst
 to the **Finder desktop**. It ships as a single `.sfc` — no special cartridge chip,
 no expansion hardware, just a Super Nintendo (and a lot of patience).
 
+<!-- Screenshots live in docs/assets/, which is gitignored: they show Apple's
+     boot screens / UI and are not shipped in the repo. Build with your own
+     ROM + disk and they're a Mesen screenshot away. -->
 <p align="center">
-  <img src="docs/assets/macboot_000.png" width="420" alt="The Happy Mac, rendered live on a SNES"><br>
-  <sub>The Happy Mac, booting live on the SNES.</sub>
+  <img src="docs/assets/macboot_003.png" width="420" alt="The Apple menu, opened with a SNES controller"><br>
+  <sub>The 🍎 menu, opened on a Super Nintendo — the d-pad moves the mouse, A clicks.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/assets/macboot_000.png" width="205" alt="Happy Mac">
+  <img src="docs/assets/macboot_001.png" width="205" alt="Welcome to Macintosh">
+  <img src="docs/assets/macboot_002.png" width="205" alt="The Finder desktop">
+  <img src="docs/assets/macboot_004.png" width="205" alt="The Control Panel desk accessory"><br>
+  <sub>The whole ride: Happy Mac → Welcome to Macintosh → the Finder desktop →
+  the Control Panel, open and running. Every frame is the SNES's own output.</sub>
 </p>
 
 ## Wait, what?
